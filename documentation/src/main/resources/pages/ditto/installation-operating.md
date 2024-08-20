@@ -1,7 +1,7 @@
 ---
 title: Operating Ditto
 tags: [installation]
-keywords: operating, docker, docker-compose, devops, logging, logstash, elk, monitoring, prometheus, grafana
+keywords: operating, docker, docker-compose, devops, logging, logstash, elk, monitoring, prometheus, grafana, tracing, metrics
 permalink: installation-operating.html
 ---
 
@@ -28,6 +28,51 @@ the following environment variables in order to configure the connection to the 
 * `MONGO_DB_WRITE_CONCERN`: Configure MongoDB write concern
 * `PEKKO_PERSISTENCE_MONGO_JOURNAL_WRITE_CONCERN`: Configure Pekko Persistence MongoDB journal write concern
 * `PEKKO_PERSISTENCE_MONGO_SNAPS_WRITE_CONCERN`: Configure Pekko Persistence MongoDB snapshot write concern
+
+#### MongoDB tuning
+
+This section contains known aspects when/how to tune Ditto working with MongoDB.
+
+##### Background aggregation queries
+
+Ditto runs several "background" queries against MongoDB (e.g. in order to clean up data in the background, 
+depending on the current load to the DB) using `aggregate`.  
+This mainly is done on the "snapshot" collections, e.g. `things_snaps`, `policies_snaps`, `connections_snaps`.  
+
+###### MongoDB 5
+
+In MongoDB 5, the default settings of Ditto work just fine - the MongoDB `aggregate` queries run quick enough and do
+not cause much disk read operations.
+
+###### MongoDB 6
+
+In MongoDB 6 however, the `aggregate` queries Ditto does to the snapshot collections drastically slowed down with much
+data in the snapshot stores.  
+If you encounter poor query performance and e.g. a lot of additional "disk read IOPS", you are also affected by this
+issue. In that case, there are options in Ditto to enable creation of additional indexes which speed up the aggregation 
+queries to a comparable level than with MongoDB 5.
+
+The following environment variables can be enabled to create those indexes:
+
+* `MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_ID`: `true`
+* `MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_SN`: `true`
+* `MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_SN_ID`: `true`
+
+They are also configurable via Helm values, e.g. for the `things` service:
+```yaml
+things:
+  config:
+    # holds configuration regarding the MongoReadJournal and e.g. the aggregation queries which are performed in it
+    readJournal:
+      # indexes contains configuration about additional indexes to create
+      indexes:
+        # whether to create the "pid"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidId: true
+        # whether to create the "pid"+"sn" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSn: true
+        # whether to create the "pid"+"sn"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSnId: true
+```
 
 ### Ditto configuration
 
@@ -324,6 +369,69 @@ entities (things/policies) and no-one other:
 
 These system properties would have to be configured for the "things" and "policies" services.
 
+## Limiting Indexed Fields
+
+The default behavior of Ditto is to index the complete JSON of a thing, which includes all its attributes and features.  This may not be desired behavior for certain use cases:
+* Increased load on the search database, leading to performance degradation and increased database cost.
+* Only a few fields are ever used for searching.
+
+Since Ditto *3.5.0*, there is a configuration to specify, by a namespace pattern, which fields will be included in the search database.
+
+To enable this functionality, there are two new options in the `thing-search.conf` configuration:
+
+```hocon
+ditto {
+  //...
+  caching-signal-enrichment-facade-provider = org.eclipse.ditto.thingsearch.service.persistence.write.streaming.SearchIndexingSignalEnrichmentFacadeProvider
+  //...
+  search {
+    namespace-indexed-fields = [
+      {
+        namespace-pattern = "org.eclipse.test"
+        indexed-fields = [
+           "attributes",
+           "features/info/properties",
+           "features/info/other"
+        ]
+      },
+      {
+        namespace-pattern = "org.eclipse*"
+        indexed-fields = [
+           "attributes",
+           "features/info"
+        ]
+      }
+    ]
+  }
+```
+
+There is a new implementation of the caching signal enrichment facade provider that must be configured to enable this
+functionality.
+
+For each namespace pattern, only the selected fields are included in the search database. In the example above, for 
+things in the "org.eclipse.test" namespace, the fields indexed in the search database will
+only be "attributes", "features/info/properties", and "features/info/other".  
+Things matching the "org.eclipse*" namespace, only the "attributes" and "features/info" paths will be the only fields 
+indexed in the search database.
+
+Important notes: 
+* Ditto will use the namespace of the thing and match the FIRST namespace-pattern it encounters. So make sure any
+  configured namespace-patterns are unique enough to match.
+* Ditto will automatically add the system-level fields it needs to operate, so no manual configuration of these is
+  necessary.
+
+Example for configuring the same configuration via system properties for the `things-search` service:
+
+```shell
+-Dditto.search.namespace-indexed-fields.0.namespace-pattern=org.eclipse.test
+-Dditto.search.namespace-indexed-fields.0.indexed-fields.0=attributes
+-Dditto.search.namespace-indexed-fields.0.indexed-fields.1=features/info/properties
+-Dditto.search.namespace-indexed-fields.0.indexed-fields.2=features/info/other
+-Dditto.search.namespace-indexed-fields.1.namespace-pattern=org.eclipse*
+-Dditto.search.namespace-indexed-fields.1.indexed-fields.0=attributes
+-Dditto.search.namespace-indexed-fields.1.indexed-fields.1=features/info
+```
+
 ## Logging
 
 Gathering logs for a running Ditto installation can be achieved by:
@@ -422,6 +530,61 @@ To put it in a nutshell, Ditto reports:
 Have a look at the 
 [example Grafana dashboards](https://github.com/eclipse-ditto/ditto/tree/master/deployment/operations/grafana-dashboards)
 and build and share new ones back to the Ditto community.
+
+### Operator defined custom metrics
+
+Starting with Ditto 3.5.0, it is possible to configure "custom metrics" which are gathered by counting things matching
+a defined namespace/filter combination.  
+This is configured via the [search](architecture-services-things-search.html) service configuration and builds on the
+[count things](basic-search.html#search-count-queries) functionality.
+
+The idea behind this is that you want to show some statistic (e.g. in Grafana) about the amount of "Things" managed in
+Ditto fulfilling a certain condition.
+
+This would be an example search service configuration snippet for e.g. providing a metric named 
+`all_produced_and_not_installed_devices` defining a query on existence of a `production-date` and absence of 
+an `installation-date` attribute:
+```hocon
+ditto {
+  search {
+    operator-metrics {
+      enabled = true
+      scrape-interval = 15m
+      custom-metrics {
+        all_produced_and_not_installed_devices {
+          scrape-interval = 5m # overwrite scrape interval, run each 5 minutes
+          namespaces = [
+            "org.eclipse.ditto.smokedetectors"
+            "org.eclipse.ditto.cameras"
+          ]
+          filter = "and(exists(attributes/production-date),not(exists(attributes/installation-date)))"
+          tags {
+            company = "acme-corp"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+In order to add custom metrics via System properties, the following example shows how the above metric can be configured:
+```
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.enabled=true
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.scrape-interval=5m
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.namespaces.0=org.eclipse.ditto.smokedetectors
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.namespaces.1=org.eclipse.ditto.cameras
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.filter=and(exists(attributes/production-date),not(exists(attributes/installation-date)))
+-Dditto.search.operator-metrics.custom-metrics.all_produced_and_not_installed_devices.tags.company=acme-corp
+```
+
+Ditto will perform a [count things operation](basic-search.html#search-count-queries) each `5m` (5 minutes), providing
+a gauge named `all_produced_and_not_installed_devices` with the count of the query, adding the tag `company="acme-corp"`.
+
+In Prometheus format this would look like:
+```
+all_produced_and_not_installed_devices{company="acme-corp"} 42.0
+```
 
 ## Tracing
 

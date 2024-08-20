@@ -14,7 +14,22 @@
 import * as Utils from '../utils.js';
 import crudToolbarHTML from './crudToolbar.html';
 
-class CrudToolbar extends HTMLElement {
+const CLASS_BG = 'editBackground'
+const CLASS_FG = 'editForground';
+const CLASS_FG_FULLSCREEN = 'editForgroundBig';
+
+let ICON_CLASS_FS = 'bi-arrows-fullscreen';
+let ICON_CLASS_FS_EXIT = 'bi-fullscreen-exit';
+
+const ATTR_FULLSCREEN = 'fullscreen';
+
+export enum CrudOperation {
+  CREATE,
+  UPDATE,
+  DELETE,
+}
+
+export class CrudToolbar extends HTMLElement {
   isEditing = false;
   isEditDisabled = false;
   isCreateDisabled = false;
@@ -27,42 +42,28 @@ class CrudToolbar extends HTMLElement {
     buttonUpdate: null,
     buttonDelete: null,
     buttonCancel: null,
+    buttonFullscreen: null,
     divRoot: null,
   };
-
-  static get observedAttributes() {
-    return [`extraeditclass`];
-  }
-
-  private _extraEditClass: string;
-
-  get extraeditclass() {
-    return this._extraEditClass;
-  }
-
-  set extraeditclass(val: string) {
-    if (val == null) { // check for null and undefined
-      this.removeAttribute('extraeditclass');
-    }
-    else {
-      this.setAttribute('extraeditclass', val);
-    }
-  }
 
   get idValue() {
     return this.dom.inputIdValue.value;
   }
 
-  attributeChangedCallback(name, oldValue, newValue) {
-    if (name === `extraeditclass`) {
-      this._extraEditClass = newValue;
-    }
-  }
-
   set idValue(newValue) {
-    (this.shadowRoot.getElementById('inputIdValue') as HTMLInputElement).value = newValue;
+    const domInput: HTMLInputElement = this.shadowRoot.getElementById('inputIdValue') as HTMLInputElement; 
+    domInput.value = newValue;
+    domInput.classList.remove('is-invalid');
+
+    const buttonEdit = this.shadowRoot.getElementById('buttonEdit');
+    if (newValue && newValue !== '') {
+      buttonEdit.innerText = 'Edit';
+    } else {
+      buttonEdit.innerText = 'Create'
+    }
+
     const buttonDelete = this.shadowRoot.getElementById('buttonDelete');
-    if (!this.isDeleteDisabled && newValue && newValue !== '') {
+    if (!this.isEditing && !this.isDeleteDisabled && newValue && newValue !== '') {
       buttonDelete.removeAttribute('hidden');
     } else {
       buttonDelete.setAttribute('hidden', '');
@@ -73,25 +74,34 @@ class CrudToolbar extends HTMLElement {
     return this.isEditDisabled;
   }
 
-  set createDisabled(newValue) {
+  set createDisabled(newValue: boolean) {
     this.isCreateDisabled = newValue;
-    this.setButtonState('buttonCreate', newValue);
+    this.lazyInit(this.dom.buttonCreate);
+    this.setButtonState(this.dom.buttonCreate, newValue);
   }
 
-  set deleteDisabled(newValue) {
+  set deleteDisabled(newValue: boolean) {
     this.isDeleteDisabled = newValue;
-    this.setButtonState('buttonDelete', newValue);
+    this.lazyInit(this.dom.buttonDelete);
+    this.setButtonState(this.dom.buttonDelete, newValue);
   }
 
-  set editDisabled(newValue) {
+  set editDisabled(newValue: boolean) {
     this.isEditDisabled = newValue;
     if (!this.isEditing) {
-      this.setButtonState('buttonEdit', newValue);
+      this.lazyInit(this.dom.buttonEdit);
+      this.setButtonState(this.dom.buttonEdit, newValue);
     }
   }
 
-  setButtonState(buttonId, isDisabled) {
-    const button = this.shadowRoot.getElementById(buttonId);
+  lazyInit(element: HTMLElement) {
+    if (!element) {
+      Utils.getAllElementsById(this.dom, this.shadowRoot);
+    }
+  }
+
+  setButtonState(button: HTMLButtonElement, isDisabled: boolean) {
+    // const button = this.shadowRoot.getElementById(buttonId);
 
     if (isDisabled) {
       button.setAttribute('hidden', '');
@@ -120,6 +130,11 @@ class CrudToolbar extends HTMLElement {
       this.dom.buttonCreate.onclick = this.eventDispatcher('onCreateClick');
       this.dom.buttonUpdate.onclick = this.eventDispatcher('onUpdateClick');
       this.dom.buttonDelete.onclick = this.eventDispatcher('onDeleteClick');
+      this.dom.buttonFullscreen.onclick = () => this.toggleFullscreen();
+      this.dom.inputIdValue.addEventListener('change', (event) => {
+        (event.target as HTMLElement).classList.remove('is-invalid');
+        this.dispatchEvent(new CustomEvent('onIdValueChange', { composed: true }));
+      });
     });
   };
 
@@ -133,17 +148,16 @@ class CrudToolbar extends HTMLElement {
 
   toggleEdit(isCancel) {
     this.isEditing = !this.isEditing;
-    document.getElementById('modalCrudEdit').classList.toggle('editBackground');
-    this.dom.divRoot.classList.toggle('editForground');
-    if (this._extraEditClass) {
-      this.dom.divRoot.classList.toggle(this._extraEditClass);
-    }
+  
+    // toggle modal mode;
+    document.getElementById('modalCrudEdit').classList.toggle(CLASS_BG);
+    document.body.classList.toggle('modal-open');
+    document.body.style.overflow = this.isEditing && this.hasAttribute(ATTR_FULLSCREEN) ? 'hidden' : '';
+    this.dom.divRoot.classList.toggle(this.hasAttribute(ATTR_FULLSCREEN) ? CLASS_FG_FULLSCREEN : CLASS_FG);
 
-    if (this.isEditing || this.isEditDisabled) {
-      this.dom.buttonEdit.setAttribute('hidden', '');
-    } else {
-      this.dom.buttonEdit.removeAttribute('hidden');
-    }
+    // toggle button states;
+    this.setButtonState(this.dom.buttonEdit, this.isEditing || this.isEditDisabled);
+    this.setButtonState(this.dom.buttonFullscreen, !this.isEditing);
     this.dom.buttonCancel.toggleAttribute('hidden');
 
     if (this.isEditing) {
@@ -159,8 +173,11 @@ class CrudToolbar extends HTMLElement {
     if (this.isEditing || !this.dom.inputIdValue.value) {
       this.dom.buttonDelete.setAttribute('hidden', '');
     }
+
+
     const allowIdChange = this.isEditing && (!this.dom.inputIdValue.value || this.hasAttribute('allowIdChange'));
     this.dom.inputIdValue.disabled = !allowIdChange;
+  
     this.dispatchEvent(new CustomEvent('onEditToggle', {
       composed: true,
       detail: {
@@ -168,6 +185,18 @@ class CrudToolbar extends HTMLElement {
         isCancel: isCancel,
       },
     }));
+  }
+
+  toggleFullscreen() {
+    this.toggleAttribute(ATTR_FULLSCREEN);
+    this.dom.buttonFullscreen.querySelector('.bi').classList.toggle(ICON_CLASS_FS);
+    this.dom.buttonFullscreen.querySelector('.bi').classList.toggle(ICON_CLASS_FS_EXIT);
+    document.body.style.overflow = this.isEditing && this.hasAttribute(ATTR_FULLSCREEN) ? 'hidden' : '';
+    if (this.dom.divRoot.classList.contains(CLASS_FG)) {
+      this.dom.divRoot.classList.replace(CLASS_FG, CLASS_FG_FULLSCREEN);
+    } else {
+      this.dom.divRoot.classList.replace(CLASS_FG_FULLSCREEN, CLASS_FG);
+    }
   }
 }
 

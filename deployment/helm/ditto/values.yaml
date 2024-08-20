@@ -19,6 +19,14 @@ serviceAccount:
   # name is the name of the service account to use
   #  If not set and create is true, a name is generated using the fullname template
   name:
+  # isUseAwsIamRole specifies whether to use an AWS IAM Role for Service Accounts (IRSA).
+  # Set to true to use IRSA, which allows the pod to assume an IAM role.
+  # When set to true, ensure that roleArn is specified.
+  isUseAwsIamRole: false
+  # roleArn is the Amazon Resource Name (ARN) of the IAM role to be assumed by the service account.
+  # This is required if isUseAwsIamRole is set to true.
+  # Example: arn:aws:iam::<account-id>:role/<role-name>
+  roleArn: ""
 
 rbac:
   # enabled controls whether RBAC resources will be created
@@ -68,11 +76,19 @@ global:
     maxHeadersSize: 5k
     # maxAuthSubjectsCount the maximum possible number of authorization subjects in Ditto headers, default: 100
     maxAuthSubjectsCount: 100
-  # basicAuthUsers configures (as a map) several user/password combinations which the nginx of the Ditto chart will authenticate
-  basicAuthUsers: {}
-  # ditto:
-  #   user: ditto
+  # basicAuthUsers configures several user/password combinations which the nginx of the Ditto chart will authenticate
+  basicAuthUsers:
+  # - user: ditto
   #   password: ditto
+  # - user: jane
+  #   password: janesPw
+
+  # existingSecret contains the name of existing secret containing user and password
+  #  format: ${user}:${password}, where secret key is ${user} and value is ${password}
+  #  example creating secret for users ditto and jane:
+  #    kubectl create secret generic ditto-basic-auth --from-literal ditto=ditto --from-literal jane=janesPw
+  #  if not set then basicAuthUsers values are used.
+  existingSecret:
   # hashedBasicAuthUsers configures a list of hashed .htpasswd username/password entries
   hashedBasicAuthUsers: []
   # jwtOnly controls whether only OpenID-Connect authentication is supported
@@ -123,6 +139,10 @@ global:
       enabled: false
       # endpoint configures the logstash endpoint to send logs to
       endpoint: ""
+      # logstash write buffer size
+      writeBufferSize: 8192
+      # logstash ring buffer size
+      ringBufferSize: 8192
     # logFiles defines logging to log files config
     logFiles:
       # enabled whether to write logs to log files
@@ -135,6 +155,14 @@ global:
       enabled: true
       # fileName passed as Java system property "-Dlogback.configurationFile"
       fileName: logback.xml
+  # metrics configuration for Ditto
+  metrics:
+    # metricsPrefix defines a prefix to use for all Ditto created metrics (counters, gauges, histograms)
+    metricsPrefix: ""
+    # systemMetrics contains the configuration for obtaining system metrics (via Kamon)
+    systemMetrics:
+      # enabled if enabled, system metrics are gathered
+      enabled: true
   # tracing configuration for Ditto
   tracing:
     # enabled whether tracing (via OpenTelemetry) is enabled
@@ -158,6 +186,21 @@ global:
     adaptiveSampler:
       # throughput the throughput goal trying to achieve with the adaptive sampler
       throughput: 600
+  # podDeletionCostPatching hold configuration for whether to patch "oldest" members of the Ditto cluster with higher
+  #  k8s pod-deletion-cost annotations so that they are downed last when e.g. doing an upgrade
+  podDeletionCostPatching:
+    # enabled whether the pod-deletion-cost annotation patching should be enabled
+    enabled: true
+    # annotations defines k8s annotations to add to corresponding jobs
+    annotations: {}
+    image:
+      # repository for the pod-deletion-cost annotation patching job docker image
+      repository: public.ecr.aws/h0h9t7p1/alpine-bash-curl-jq
+      # tag for the pod-deletion-cost annotation patching job docker image
+      tag: latest
+      # pullPolicy for the pod-deletion-cost annotation patching job docker image
+      pullPolicy: IfNotPresent
+
 
 ## ----------------------------------------------------------------------------
 ## dbconfig for mongodb connections
@@ -314,6 +357,10 @@ ingress:
         add_header "X-Content-Type-Options" "nosniff" always;
         add_header "X-Frame-Options" "SAMEORIGIN" always;
         add_header "X-XSS-Protection" "1; mode=block" always;
+
+        # set ditto-specific forwarded headers
+        proxy_set_header X-Forwarded-User $remote_user;
+        proxy_set_header x-ditto-pre-authenticated "nginx:$remote_user";
   # ws the /ws (WebSocket) Ingress configuration
   ws:
     # paths configures ingress paths
@@ -381,6 +428,8 @@ ingress:
         add_header "X-Content-Type-Options" "nosniff" always;
         add_header "X-Frame-Options" "SAMEORIGIN" always;
         add_header "X-XSS-Protection" "1; mode=block" always;
+        rewrite ^(/ui)$ $1/ permanent;
+        rewrite ^(/apidoc)$ $1/ permanent;
   # devops the /devops, /api/2/connections, /status and /health commands Ingress configuration
   devops:
     # paths configures ingress paths
@@ -481,6 +530,14 @@ policies:
   extraEnv:
   # - name: LOG_LEVEL_APPLICATION
   #   value: "DEBUG"
+  extraVolumes:
+  #  - name: policies-extension
+  #    configMap:
+  #      name: policies-extension.jar
+  extraVolumeMounts:
+  #  - name: policies-extension
+  #    mountPath: /opt/ditto/policies-extension.jar
+  #    subPath: policies-extension.jar
   # resources configures the resources available/to use for the policies service
   resources:
     # cpu defines the "required" CPU of a node so that the service is placed there
@@ -556,10 +613,12 @@ policies:
       # maxPoolIdleTime configures the maximum amount of time a pooled connection is allowed to idle before closing the connection
       maxPoolIdleTime: 10m
       # journalWriteConcern the MongoDB write concern to apply for writing operations on the event journal
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       journalWriteConcern: "Journaled"
       # snapsWriteConcern the MongoDB write concern to apply for writing operations on the snapshots persistence
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       snapsWriteConcern: "Journaled"
       # journalCircuitBreaker configures the circuit breaker for MongoDB operations on the event journal
       journalCircuitBreaker:
@@ -609,6 +668,28 @@ policies:
       #  a revision number 1 higher than the previously deleted entity. If the final snapshot is deleted as well,
       #  recreation of an entity with the same ID will lead to revisionNumber=1 after its recreation.
       deleteFinalDeletedSnapshot: true
+    # readJournal holds configuration regarding the MongoReadJournal and e.g. the aggregation queries which are performed in it
+    readJournal:
+      # indexes contains configuration about additional indexes to create
+      indexes:
+        # createSnapshotAggregationIndexPidId whether to create the "pid"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidId: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSn: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSnId: false
+      # hints contains hint names to configure for different aggregation calls done in MongoReadJournal
+      hints:
+        # filterPidsThatDoesntContainTagInNewestEntry contains the hint name to use in the aggregation query
+        filterPidsThatDoesntContainTagInNewestEntry: null
+        # listLatestJournalEntries contains the hint name to use in the aggregation query
+        listLatestJournalEntries: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains both "pid" and "_id"
+        listNewestActiveSnapshotsByBatchPidId: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "pid"
+        listNewestActiveSnapshotsByBatchPid: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "_id"
+        listNewestActiveSnapshotsByBatchId: null
     # persistence holds configuration regarding (pekko) persistence of policies (event journal and snapshots)
     persistence:
       # activityCheckInterval configures to keep policies for that amount of time in memory when no other use did happen:
@@ -690,6 +771,14 @@ things:
   extraEnv:
   # - name: LOG_LEVEL_APPLICATION
   #   value: "DEBUG"
+  extraVolumes:
+  #  - name: things-extension
+  #    configMap:
+  #      name: things-extension.jar
+  extraVolumeMounts:
+  #  - name: things-extension
+  #    mountPath: /opt/ditto/things-extension.jar
+  #    subPath: things-extension.jar
   # resources configures the resources available/to use for the things service
   resources:
     # cpu defines the "required" CPU of a node so that the service is placed there
@@ -765,10 +854,12 @@ things:
       # maxPoolIdleTime configures the maximum amount of time a pooled connection is allowed to idle before closing the connection
       maxPoolIdleTime: 10m
       # journalWriteConcern the MongoDB write concern to apply for writing operations on the event journal
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       journalWriteConcern: "Acknowledged"
       # snapsWriteConcern the MongoDB write concern to apply for writing operations on the snapshots persistence
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       snapsWriteConcern: "Acknowledged"
       # journalCircuitBreaker configures the circuit breaker for MongoDB operations on the event journal
       journalCircuitBreaker:
@@ -818,6 +909,28 @@ things:
       #  a revision number 1 higher than the previously deleted entity. If the final snapshot is deleted as well,
       #  recreation of an entity with the same ID will lead to revisionNumber=1 after its recreation.
       deleteFinalDeletedSnapshot: true
+    # readJournal holds configuration regarding the MongoReadJournal and e.g. the aggregation queries which are performed in it
+    readJournal:
+      # indexes contains configuration about additional indexes to create
+      indexes:
+        # createSnapshotAggregationIndexPidId whether to create the "pid"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidId: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSn: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSnId: false
+      # hints contains hint names to configure for different aggregation calls done in MongoReadJournal
+      hints:
+        # filterPidsThatDoesntContainTagInNewestEntry contains the hint name to use in the aggregation query
+        filterPidsThatDoesntContainTagInNewestEntry: null
+        # listLatestJournalEntries contains the hint name to use in the aggregation query
+        listLatestJournalEntries: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains both "pid" and "_id"
+        listNewestActiveSnapshotsByBatchPidId: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "pid"
+        listNewestActiveSnapshotsByBatchPid: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "_id"
+        listNewestActiveSnapshotsByBatchId: null
     # persistence holds configuration regarding (pekko) persistence of things (event journal and snapshots)
     persistence:
       # activityCheckInterval configures to keep things for that amount of time in memory when no other use did happen
@@ -921,6 +1034,14 @@ thingsSearch:
   extraEnv:
   # - name: LOG_LEVEL_APPLICATION
   #   value: "DEBUG"
+  extraVolumes:
+  #  - name: search-extension
+  #    configMap:
+  #      name: search-extension.jar
+  extraVolumeMounts:
+  #  - name: search-extension
+  #    mountPath: /opt/ditto/search-extension.jar
+  #    subPath: search-extension.jar
   # resources configures the resources available/to use for the things search service
   resources:
     # cpu defines the "required" CPU of a node so that the service is placed there
@@ -1065,6 +1186,36 @@ thingsSearch:
           throughput: 100
           # period the throttle period
           period: 30s
+    # indexedFieldsLimiting by default, Ditto indexed all fields of things in its search.
+    #  However, this behavior can be customized, providing configuration to only index certain fields for specified namespaces.
+    indexedFieldsLimiting:
+      # enabled whether field index limiting should be enabled or not
+      enabled: false
+      # items contains the list of per-namespace configuration of which fields to include into to the search index
+      items:
+      #  - # namespacePattern holds the namespace for which the single limiting configuration entry should apply.
+      #    #  Wildcards `*` (Matching any number of any character) and `?` (Matches any single character) are supported.
+      #    namespacePattern: "org.eclipse.*"
+      #    # indexedFields holds a list of fields that will be explicitly included in the search index
+      #    indexedFields:
+      #      - "attributes"
+      #      - "features/included"
+    # operatorMetrics contains configuration for operator defined custom metrics, using a search "count" with namespaces and filter
+    operatorMetrics:
+      # enabled configures whether operator metrics should be enabled or not
+      enabled: true
+      # scrapeInterval defines the default scrape interval if a "customMetric" did not specify a custom scrape interval
+      scrapeInterval: 15m
+      # customMetrics holds a map of metric-names as key (e.g. "ditto_my_awesome_things") and custom metric config as value
+      customMetrics:
+      # ditto_my_awesome_things:
+      #   enabled: true
+      #   scrapeInterval: 5m
+      #   namespaces:
+      #     - "org.eclipse.ditto"
+      #   filter: "eq(attributes/awesome,true)"
+      #   tags:
+      #     foo: bar
 
 
 ## ----------------------------------------------------------------------------
@@ -1106,6 +1257,14 @@ connectivity:
   extraEnv:
   # - name: LOG_LEVEL_APPLICATION
   #   value: "DEBUG"
+  extraVolumes:
+  #  - name: connectivity-extension
+  #    configMap:
+  #      name: connectivity-extension.jar
+  extraVolumeMounts:
+  #  - name: connectivity-extension
+  #    mountPath: /opt/ditto/connectivity-extension.jar
+  #    subPath: connectivity-extension.jar
   # resources configures the resources available/to use for the connectivity service
   resources:
     # cpu defines the "required" CPU of a node so that the service is placed there
@@ -1181,10 +1340,12 @@ connectivity:
       # maxPoolIdleTime configures the maximum amount of time a pooled connection is allowed to idle before closing the connection
       maxPoolIdleTime: 10m
       # journalWriteConcern the MongoDB write concern to apply for writing operations on the event journal
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       journalWriteConcern: "Journaled"
       # snapsWriteConcern the MongoDB write concern to apply for writing operations on the snapshots persistence
-      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged
+      #  one of: Unacknowledged | Acknowledged | Journaled | ReplicaAcknowledged | W1 | W2 | W3
+      #  caution: Acknowledged refers to the MongoDB server's configured "default write concern"
       snapsWriteConcern: "Journaled"
       # journalCircuitBreaker configures the circuit breaker for MongoDB operations on the event journal
       journalCircuitBreaker:
@@ -1246,6 +1407,28 @@ connectivity:
       #  a revision number 1 higher than the previously deleted entity. If the final snapshot is deleted as well,
       #  recreation of an entity with the same ID will lead to revisionNumber=1 after its recreation.
       deleteFinalDeletedSnapshot: true
+    # readJournal holds configuration regarding the MongoReadJournal and e.g. the aggregation queries which are performed in it
+    readJournal:
+      # indexes contains configuration about additional indexes to create
+      indexes:
+        # createSnapshotAggregationIndexPidId whether to create the "pid"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidId: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSn: false
+        # createSnapshotAggregationIndexPidSn whether to create the "pid"+"sn"+"_id" compound index on the snapshot collection
+        createSnapshotAggregationIndexPidSnId: false
+      # hints contains hint names to configure for different aggregation calls done in MongoReadJournal
+      hints:
+        # filterPidsThatDoesntContainTagInNewestEntry contains the hint name to use in the aggregation query
+        filterPidsThatDoesntContainTagInNewestEntry: null
+        # listLatestJournalEntries contains the hint name to use in the aggregation query
+        listLatestJournalEntries: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains both "pid" and "_id"
+        listNewestActiveSnapshotsByBatchPidId: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "pid"
+        listNewestActiveSnapshotsByBatchPid: null
+        # listNewestActiveSnapshotsByBatchPidId contains the hint name to use in the aggregation query where the $match contains only "_id"
+        listNewestActiveSnapshotsByBatchId: null
     # persistence holds configuration regarding (akka) persistence of connections (event journal and snapshots)
     persistence:
       # keep closed, inactive connections for that amount of time in memory when no other use did happen:
@@ -1374,6 +1557,14 @@ gateway:
   extraEnv:
   # - name: LOG_LEVEL_APPLICATION
   #   value: "DEBUG"
+  extraVolumes:
+  #  - name: gatway-extension
+  #    configMap:
+  #      name: gatway-extension.jar
+  extraVolumeMounts:
+  #  - name: gatway-extension
+  #    mountPath: /opt/ditto/gatway-extension.jar
+  #    subPath: gatway-extension.jar
   # resources configures the resources available/to use for the gateway service
   resources:
     # cpu defines the "required" CPU of a node so that the service is placed there
@@ -1463,6 +1654,8 @@ gateway:
         #    authSubjects:
         #    - "{{ jwt:sub }}"
         #    - "{{ jwt:groups }}"
+        # configure the subject to inject in policy action activateTokenIntegration
+        tokenIntegrationSubject: "integration:{{policy-entry:label}}:{{jwt:aud}}"
       # devops contains the configuration of the gateway's "/devops" API, e.g. access to it
       devops:
         # secured this controls whether "/devops" and "/api/2/connections" resources are secured or not
@@ -1558,7 +1751,7 @@ nginx:
     # repository for the nginx docker image
     repository: docker.io/nginx
     # tag for the nginx docker image
-    tag: 1.25
+    tag: 1.26
     # pullPolicy for the nginx docker image
     pullPolicy: IfNotPresent
   # extraEnv to add arbitrary environment variables to nginx container
@@ -1617,6 +1810,9 @@ nginx:
     workerProcesses: 4
     # workerProcesses the 'events' 'worker_connections' option for nginx to use
     workerConnections: 1024
+    # the 'proxy_connect_timeout', 'proxy_send_timeout', 'proxy_read_timeout' and 'send_timeout' options for nginx
+    # timeouts are configured slightly higher than ditto-eclipse-ditto-gateway read-timeout
+    timeout: 70
 
 ## ----------------------------------------------------------------------------
 ## Ditto UI configuration
@@ -1691,7 +1887,7 @@ swaggerui:
     # repository for the swagger ui docker image
     repository: docker.io/swaggerapi/swagger-ui
     # tag for the swagger ui docker image
-    tag: v5.9.1
+    tag: v5.17.14
     # pullPolicy for the swagger ui docker image
     pullPolicy: IfNotPresent
   # extraEnv to add arbitrary environment variable to swagger ui container

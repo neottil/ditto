@@ -16,8 +16,6 @@ import java.net.URI;
 import java.text.MessageFormat;
 import java.util.Set;
 
-import org.eclipse.ditto.connectivity.model.Connection;
-import org.eclipse.ditto.connectivity.model.ConnectionId;
 import org.eclipse.ditto.connectivity.model.HonoAddressAlias;
 import org.eclipse.ditto.connectivity.model.UserPasswordCredentials;
 import org.eclipse.ditto.connectivity.service.config.DefaultHonoConfig;
@@ -35,8 +33,6 @@ public final class DefaultHonoConnectionFactory extends HonoConnectionFactory {
 
     private final HonoConfig honoConfig;
 
-    private ConnectionId connectionId;
-
     /**
      * Constructs a {@code DefaultHonoConnectionFactory} for the specified arguments.
      *
@@ -49,11 +45,6 @@ public final class DefaultHonoConnectionFactory extends HonoConnectionFactory {
     }
 
     @Override
-    protected void preConversion(final Connection honoConnection) {
-        connectionId = honoConnection.getId();
-    }
-
-    @Override
     public URI getBaseUri() {
         return honoConfig.getBaseUri();
     }
@@ -61,6 +52,11 @@ public final class DefaultHonoConnectionFactory extends HonoConnectionFactory {
     @Override
     public boolean isValidateCertificates() {
         return honoConfig.isValidateCertificates();
+    }
+
+    @Override
+    protected String getTrustedCertificates() {
+        return honoConfig.getTrustedCertificates();
     }
 
     @Override
@@ -86,13 +82,13 @@ public final class DefaultHonoConnectionFactory extends HonoConnectionFactory {
     @Override
     protected String resolveSourceAddress(final HonoAddressAlias honoAddressAlias) {
         return MessageFormat.format("hono.{0}.{1}",
-                honoAddressAlias.getAliasValue(), connectionId);
+                honoAddressAlias.getAliasValue(), getHonoTenantId());
     }
 
     @Override
     protected String resolveTargetAddress(final HonoAddressAlias honoAddressAlias) {
         return MessageFormat.format("hono.{0}.{1}/'{{thing:id}}'",
-                honoAddressAlias.getAliasValue(), connectionId);
+                honoAddressAlias.getAliasValue(), getHonoTenantId());
     }
 
 }

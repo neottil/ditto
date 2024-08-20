@@ -82,10 +82,14 @@ spec:
           env:
             {{- if not .Values.global.logging.customConfigFile.enabled }}
             - name: DITTO_LOGGING_DISABLE_SYSOUT_LOG
-              value: "{{ if .Values.global.logging.sysout.enabled }}false{{ else }}true{{ end }}"
+              value: "{{ printf "%t" .Values.global.logging.sysout.enabled }}"
             - name: DITTO_LOGGING_FILE_APPENDER
-              value: "{{ if .Values.global.logging.logFiles.enabled }}true{{ else }}false{{ end }}"
+              value: "{{ printf "%t" .Values.global.logging.logFiles.enabled }}"
             {{- end }}
+            - name: DITTO_METRICS_METRIC_PREFIX
+              value: "{{ .Values.global.metrics.metricsPrefix }}"
+            - name: SYSTEM_METRICS_ENABLED
+              value: "{{ .Values.global.metrics.systemMetrics.enabled }}"
             - name: DITTO_TRACING_ENABLED
               value: "{{ .Values.global.tracing.enabled }}"
             - name: DITTO_TRACING_OTEL_TRACE_REPORTER_ENABLED
@@ -101,6 +105,10 @@ spec:
             {{- if .Values.global.logging.logstash.enabled }}
             - name: DITTO_LOGGING_LOGSTASH_SERVER
               value: "{{ .Values.global.logging.logstash.endpoint }}"
+            - name: LOGSTASH_WRITE_BUFFER_SIZE
+              value: "{{ .Values.global.logging.logstash.writeBufferSize }}"
+            - name: LOGSTASH_RING_BUFFER_SIZE
+              value: "{{ .Values.global.logging.logstash.ringBufferSize }}"
             {{- end }}
             - name: POD_LABEL_SELECTOR
               value: "app.kubernetes.io/name=%s"
@@ -155,7 +163,7 @@ spec:
                 {{- end }}
                 {{ join " " .Values.policies.systemProps }}
             - name: MONGO_DB_SSL_ENABLED
-              value: "{{ if .Values.dbconfig.policies.ssl }}true{{ else }}false{{ end }}"
+              value: "{{ printf "%t" .Values.dbconfig.policies.ssl }}"
             - name: MONGO_DB_URI
               valueFrom:
                 secretKeyRef:
@@ -233,6 +241,22 @@ spec:
               value: "{{ .Values.policies.config.cleanup.creditsPerBatch }}"
             - name: CLEANUP_DELETE_FINAL_DELETED_SNAPSHOT
               value: "{{ .Values.policies.config.cleanup.deleteFinalDeletedSnapshot }}"
+            - name: MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_ID
+              value: "{{ .Values.policies.config.readJournal.indexes.createSnapshotAggregationIndexPidId }}"
+            - name: MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_SN
+              value: "{{ .Values.policies.config.readJournal.indexes.createSnapshotAggregationIndexPidSn }}"
+            - name: MONGODB_READ_JOURNAL_SHOULD_CREATE_ADDITIONAL_SNAPSHOT_AGGREGATION_INDEX_PID_SN_ID
+              value: "{{ .Values.policies.config.readJournal.indexes.createSnapshotAggregationIndexPidSnId }}"
+            - name: MONGODB_READ_JOURNAL_HINT_NAME_FILTER_PIDS_THAT_DOESNT_CONTAIN_TAG_IN_NEWEST_ENTRY
+              value: {{ .Values.policies.config.readJournal.hints.filterPidsThatDoesntContainTagInNewestEntry | default "null" | quote }}
+            - name: MONGODB_READ_JOURNAL_HINT_NAME_LIST_LATEST_JOURNAL_ENTRIES
+              value: {{ .Values.policies.config.readJournal.hints.listLatestJournalEntries | default "null" | quote }}
+            - name: MONGODB_READ_JOURNAL_HINT_NAME_LIST_NEWEST_ACTIVE_SNAPSHOT_BY_BATCH_PID_ID
+              value: {{ .Values.policies.config.readJournal.hints.listNewestActiveSnapshotsByBatchPidId | default "null" | quote }}
+            - name: MONGODB_READ_JOURNAL_HINT_NAME_LIST_NEWEST_ACTIVE_SNAPSHOT_BY_BATCH_PID
+              value: {{ .Values.policies.config.readJournal.hints.listNewestActiveSnapshotsByBatchPid | default "null" | quote }}
+            - name: MONGODB_READ_JOURNAL_HINT_NAME_LIST_NEWEST_ACTIVE_SNAPSHOT_BY_BATCH_ID
+              value: {{ .Values.policies.config.readJournal.hints.listNewestActiveSnapshotsByBatchId | default "null" | quote }}
             - name: POLICIES_PERSISTENCE_PING_RATE_FREQUENCY
               value: "{{ .Values.policies.config.persistence.pingRate.frequency }}"
             - name: POLICIES_PERSISTENCE_PING_RATE_ENTITIES
@@ -244,6 +268,14 @@ spec:
             {{- if .Values.policies.extraEnv }}
               {{- toYaml .Values.policies.extraEnv | nindent 12 }}
             {{- end }}
+            {{- if .Values.serviceAccount.isUseAwsIamRole }}
+            - name: AWS_ROLE_ARN
+              value: "{{ .Values.serviceAccount.roleArn }}"
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: "/var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+            {{- end }}
+            - name: USE_AWS_IAM_ROLE
+              value: "{{ printf "%t" .Values.serviceAccount.isUseAwsIamRole }}"
           ports:
             - name: http
               containerPort: 8080
@@ -287,6 +319,9 @@ spec:
             - name: ditto-log-files-directory
               mountPath: /var/log/ditto
             {{- end }}
+            {{- if .Values.policies.extraVolumeMounts }}
+              {{- toYaml .Values.policies.extraVolumeMounts | nindent 12 }}
+            {{- end }}
           resources:
             requests:
               cpu: {{ mulf .Values.policies.resources.cpu 1000 }}m
@@ -299,7 +334,7 @@ spec:
           {{- if .Values.openshift.enabled }}
           {{- with .Values.openshift.securityContext }}
           securityContext:
-            {{- toYaml . | nindent 8 }}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- else }}
           securityContext:
@@ -333,4 +368,7 @@ spec:
             path: /var/log/ditto
             type: DirectoryOrCreate
         {{- end }}
+        {{- if .Values.policies.extraVolumes }}
+          {{- toYaml .Values.policies.extraVolumes | nindent 8 }}
+        {{- end}}
 {{- end }}

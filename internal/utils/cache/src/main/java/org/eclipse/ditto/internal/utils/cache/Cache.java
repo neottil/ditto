@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * A general purpose cache for items which are associated with a key.
@@ -35,6 +36,18 @@ public interface Cache<K, V> {
      * @throws NullPointerException if {@code key} is {@code null}.
      */
     CompletableFuture<Optional<V>> get(K key);
+
+    /**
+     * Returns a {@link CompletableFuture} returning the value which is associated with the specified key, specifying
+     * an {@code errorHandler}.
+     *
+     * @param key the key to get the associated value for.
+     * @param errorHandler function to invoke when a {@code Throwable} is encountered by the cache loader.
+     * @return a {@link CompletableFuture} returning the value which is associated with the specified key or an empty
+     * {@link Optional}.
+     * @throws NullPointerException if {@code key} is {@code null}.
+     */
+    CompletableFuture<Optional<V>> get(K key, Function<Throwable, Optional<V>> errorHandler);
 
     /**
      * Retrieve the value associated with a key in a future if it exists in the cache, or a future empty optional if
@@ -62,6 +75,16 @@ public interface Cache<K, V> {
      * @return {@code true} if the entry was cached and is now invalidated, {@code false} otherwise.
      */
     boolean invalidate(K key);
+
+    /**
+     * Invalidates the passed key from the cache if present and the passed {@code valueCondition} evaluates to
+     * {@code true}.
+     *
+     * @param key the key to invalidate.
+     * @param valueCondition the condition which has to pass in order to invalidate the key from the cache.
+     * @return {@code true} if the entry was cached and is now invalidated, {@code false} otherwise.
+     */
+    boolean invalidateConditionally(K key, Predicate<V> valueCondition);
 
     /**
      * Associates the {@code value} with the {@code key} in this cache.

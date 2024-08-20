@@ -24,6 +24,7 @@ import org.eclipse.ditto.internal.utils.health.config.DefaultHealthCheckConfig;
 import org.eclipse.ditto.internal.utils.persistence.mongo.config.DefaultMongoDbConfig;
 import org.eclipse.ditto.internal.utils.persistence.mongo.config.ReadConcern;
 import org.eclipse.ditto.internal.utils.persistence.mongo.config.ReadPreference;
+import org.eclipse.ditto.thingsearch.service.common.config.DefaultOperatorMetricsConfig;
 import org.eclipse.ditto.thingsearch.service.common.config.DefaultSearchPersistenceConfig;
 import org.eclipse.ditto.thingsearch.service.common.config.DefaultUpdaterConfig;
 import org.eclipse.ditto.thingsearch.service.common.config.DittoSearchConfig;
@@ -43,9 +44,11 @@ public final class DittoSearchConfigTest {
         assertInstancesOf(DittoSearchConfig.class,
                 areImmutable(),
                 provided(DefaultHealthCheckConfig.class, DittoServiceConfig.class, DefaultUpdaterConfig.class,
-                        DefaultMongoDbConfig.class, DefaultSearchPersistenceConfig.class)
+                        DefaultMongoDbConfig.class, DefaultSearchPersistenceConfig.class,
+                        DefaultOperatorMetricsConfig.class)
                         .areAlsoImmutable(),
-                assumingFields("simpleFieldMappings").areSafelyCopiedUnmodifiableCollectionsWithImmutableElements());
+                assumingFields("simpleFieldMappings", "namespaceIndexedFields")
+                                  .areSafelyCopiedUnmodifiableCollectionsWithImmutableElements());
     }
 
     @Test
@@ -59,6 +62,7 @@ public final class DittoSearchConfigTest {
     public void testQueryPersistenceConfig() {
         final var config = ConfigFactory.load("search-test.conf");
         final var underTest = DittoSearchConfig.of(DefaultScopedConfig.dittoScoped(config));
+
         final var queryPersistenceConfig = underTest.getQueryPersistenceConfig();
         assertThat(queryPersistenceConfig.readConcern()).isEqualTo(ReadConcern.LINEARIZABLE);
         assertThat(queryPersistenceConfig.readPreference()).isEqualTo(ReadPreference.NEAREST);

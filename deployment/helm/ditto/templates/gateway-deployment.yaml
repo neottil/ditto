@@ -83,10 +83,14 @@ spec:
           env:
             {{- if not .Values.global.logging.customConfigFile.enabled }}
             - name: DITTO_LOGGING_DISABLE_SYSOUT_LOG
-              value: "{{ if .Values.global.logging.sysout.enabled }}false{{ else }}true{{ end }}"
+              value: "{{ printf "%t" .Values.global.logging.sysout.enabled }}"
             - name: DITTO_LOGGING_FILE_APPENDER
-              value: "{{ if .Values.global.logging.logFiles.enabled }}true{{ else }}false{{ end }}"
+              value: "{{ printf "%t" .Values.global.logging.logFiles.enabled }}"
             {{- end }}
+            - name: DITTO_METRICS_METRIC_PREFIX
+              value: "{{ .Values.global.metrics.metricsPrefix }}"
+            - name: SYSTEM_METRICS_ENABLED
+              value: "{{ .Values.global.metrics.systemMetrics.enabled }}"
             - name: DITTO_TRACING_ENABLED
               value: "{{ .Values.global.tracing.enabled }}"
             - name: DITTO_TRACING_OTEL_TRACE_REPORTER_ENABLED
@@ -102,6 +106,10 @@ spec:
             {{- if .Values.global.logging.logstash.enabled }}
             - name: DITTO_LOGGING_LOGSTASH_SERVER
               value: "{{ .Values.global.logging.logstash.endpoint }}"
+            - name: LOGSTASH_WRITE_BUFFER_SIZE
+              value: "{{ .Values.global.logging.logstash.writeBufferSize }}"
+            - name: LOGSTASH_RING_BUFFER_SIZE
+              value: "{{ .Values.global.logging.logstash.ringBufferSize }}"
             {{- end }}
             - name: POD_LABEL_SELECTOR
               value: "app.kubernetes.io/name=%s"
@@ -145,6 +153,12 @@ spec:
                 "{{ printf "%s%s%s%d=%s" "-Dditto.gateway.authentication.devops.oauth.openid-connect-issuers." $key ".auth-subjects." $index $subject }}"
                 {{- end }}
                 {{- end }}
+                {{- range $index, $oauthSubject := .Values.gateway.config.authentication.devops.oauthSubjects }}
+                "{{ printf "%s%d=%s" "-Dditto.gateway.authentication.devops.devops-oauth2-subjects." $index $oauthSubject }}"
+                {{- end }}
+                {{- range $index, $oauthSubject := .Values.gateway.config.authentication.devops.statusOauthSubjects }}
+                "{{ printf "%s%d=%s" "-Dditto.gateway.authentication.devops.status-oauth2-subjects." $index $oauthSubject }}"
+                {{- end }}
                 {{ join " " .Values.gateway.systemProps }}
             - name: CLUSTER_BS_REQUIRED_CONTACTS
               value: "{{ .Values.global.cluster.requiredContactPoints }}"
@@ -187,10 +201,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.gateway.config.authentication.devops.existingSecret | default ( printf "%s-gateway-secret" ( include "ditto.fullname" . )) }}
                   key: devops-password
-            {{- range $index, $oauthSubject := .Values.gateway.config.authentication.devops.oauthSubjects }}
-            - name: DEVOPS_OAUTH2_SUBJECTS.{{ $index }}
-              value: "{{ $oauthSubject }}"
-            {{- end }}
             - name: DEVOPS_STATUS_SECURED
               value: "{{ .Values.gateway.config.authentication.devops.statusSecured }}"
             - name: STATUS_AUTHENTICATION_METHOD
@@ -200,10 +210,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.gateway.config.authentication.devops.existingSecret | default ( printf "%s-gateway-secret" ( include "ditto.fullname" . )) }}
                   key: status-password
-            {{- range $index, $oauthSubject := .Values.gateway.config.authentication.devops.statusOauthSubjects }}
-            - name: STATUS_OAUTH2_SUBJECTS.{{ $index }}
-              value: "{{ $oauthSubject }}"
-            {{- end }}
             - name: WS_SUBSCRIBER_BACKPRESSURE
               value: "{{ .Values.gateway.config.websocket.subscriber.backpressureQueueSize }}"
             - name: WS_PUBLISHER_BACKPRESSURE
@@ -222,6 +228,8 @@ spec:
               value: "{{ .Values.gateway.config.sse.throttling.limit }}"
             - name: OAUTH_ALLOWED_CLOCK_SKEW
               value: "{{ .Values.gateway.config.authentication.oauth.allowedClockSkew }}"
+            - name: OAUTH_TOKEN_INTEGRATION_SUBJECT
+              value: "{{ .Values.gateway.config.authentication.oauth.tokenIntegrationSubject }}"
             {{- if .Values.gateway.extraEnv }}
               {{- toYaml .Values.gateway.extraEnv | nindent 12 }}
             {{- end }}
@@ -268,6 +276,9 @@ spec:
             - name: ditto-log-files-directory
               mountPath: /var/log/ditto
             {{- end }}
+            {{- if .Values.gateway.extraVolumeMounts }}
+              {{- toYaml .Values.gateway.extraVolumeMounts | nindent 12 }}
+            {{- end }}
           resources:
             requests:
               cpu: {{ mulf .Values.gateway.resources.cpu 1000 }}m
@@ -280,7 +291,7 @@ spec:
           {{- if .Values.openshift.enabled }}
           {{- with .Values.openshift.securityContext }}
           securityContext:
-            {{- toYaml . | nindent 8 }}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- else }}
           securityContext:
@@ -314,4 +325,7 @@ spec:
             path: /var/log/ditto
             type: DirectoryOrCreate
         {{- end }}
+        {{- if .Values.gateway.extraVolumes }}
+          {{- toYaml .Values.gateway.extraVolumes | nindent 8 }}
+        {{- end}}
 {{- end }}

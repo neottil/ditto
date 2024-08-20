@@ -15,6 +15,7 @@
 import autoComplete from '@tarekraafat/autocomplete.js';
 import * as ace from 'ace-builds/src-noconflict/ace';
 import { Modal, Toast } from 'bootstrap';
+import * as DOMPurify from 'dompurify';
 
 
 const dom = {
@@ -35,22 +36,24 @@ export function ready() {
  * @param {HTMLTableElement} table tbody element the row is added to
  * @param {String} key first column text of the row. Acts as id of the row
  * @param {boolean} selected if true, the new row will be marked as selected
- * @param {boolean} withClipBoardCopy add a clipboard button at the last column of the row
+ * @param {boolean} clipBoardValue add a clipboard button at the last column of the row
  * @param {array} columnValues texts for additional columns of the row
- * @return {Element} created row
+ * @return {HTMLTableRowElement} created row
  */
-export const addTableRow = function(table, key, selected, withClipBoardCopy = false, ...columnValues) {
-  const row = table.insertRow();
+export const addTableRow = function(table: HTMLTableElement, key: string, selected: boolean, clipBoardValue?: string, ...columnValues: string[]) {
+  const row: HTMLTableRowElement = table.insertRow();
   row.id = key;
   addCellToRow(row, key, key, 0);
+  let lastAddedColumn = key;
   columnValues.forEach((value) => {
     addCellToRow(row, value);
+    lastAddedColumn = value;
   });
   if (selected) {
     row.classList.add('table-active');
   }
-  if (withClipBoardCopy) {
-    addClipboardCopyToRow(row);
+  if (clipBoardValue) {
+    addActionToRow(row, ICON_CLASS_CLIPBOARD, getRowClipboardAction(ICON_CLASS_CLIPBOARD, ICON_CLASS_CLIPFEEDBACK, clipBoardValue), 'Copy to clipboard');
   }
   return row;
 };
@@ -60,18 +63,22 @@ export const addTableRow = function(table, key, selected, withClipBoardCopy = fa
  * @param {HTMLTableRowElement} row target row
  * @param {String} id an id for the checkbox element
  * @param {boolean} checked check the checkbox
+ * @param {boolean} disabled callback for the onchange event of the checkbox
  * @param {function} onToggle callback for the onchange event of the checkbox
  */
-export function addCheckboxToRow(row, id, checked, onToggle) {
+export function addCheckboxToRow(row: HTMLTableRowElement, id: string, checked: boolean, disabled: boolean = false, onToggle = null): HTMLInputElement {
   const td = row.insertCell(0);
   td.style.verticalAlign = 'middle';
   td.style.width = '25px';
   const checkBox = document.createElement('input');
+  checkBox.classList.add('form-check-input');
   checkBox.type = 'checkbox';
   checkBox.id = id;
   checkBox.checked = checked;
-  checkBox.onchange = onToggle;
+  checkBox.disabled = disabled;
+  onToggle && (checkBox.onchange = onToggle);
   td.append(checkBox);
+  return checkBox;
 }
 
 /**
@@ -84,7 +91,7 @@ export function addCheckboxToRow(row, id, checked, onToggle) {
  */
 export function addCellToRow(row, cellContent, cellTooltip = null, position = -1) {
   const cell = row.insertCell(position);
-  cell.innerHTML = cellContent;
+  cell.textContent = cellContent;
   cell.setAttribute('data-bs-toggle', 'tooltip');
   cell.title = cellTooltip ?? cellContent;
   return cell;
@@ -94,18 +101,27 @@ export function addCellToRow(row, cellContent, cellTooltip = null, position = -1
  * Adds a clipboard copy button to a row. The text of the previous table cell will be copied
  * @param {HTMLTableRowElement} row target row
  */
-export function addClipboardCopyToRow(row: HTMLTableRowElement) {
+export function addActionToRow(row: HTMLTableRowElement, iconClass: string, onClickAction: (evt: Event) => any, toolTip?: string) {
   const td = row.insertCell();
-  td.style.textAlign = 'right';
+  td.classList.add('table-action-column');
   const button = document.createElement('button');
-  button.classList.add('btn', 'btn-sm');
+  button.classList.add('btn');
   button.style.padding = '0';
-  button.innerHTML = `<i class="bi bi-clipboard"></i>`;
-  button.onclick = (evt) => {
-    const td = (evt.currentTarget as HTMLElement).parentNode.previousSibling as HTMLTableCellElement;
-    navigator.clipboard.writeText(td.innerText);
-  };
+  button.innerHTML = `<i class="bi ${iconClass}"></i>`;
+  toolTip && (button.title = toolTip);
+  button.onclick = onClickAction;
   td.appendChild(button);
+}
+
+export let ICON_CLASS_CLIPBOARD = 'bi-copy';
+export let ICON_CLASS_CLIPFEEDBACK = 'bi-check-lg';
+export function getRowClipboardAction(iconClassMain: string, iconClassFeedback: string, context: any) {
+  return (evt: Event) => {
+    navigator.clipboard.writeText(context);
+    const icon = (evt.currentTarget as HTMLElement).querySelector('.bi');
+    icon.classList.replace(iconClassMain, iconClassFeedback);
+    setTimeout(() => icon.classList.replace(iconClassFeedback, iconClassMain), 500);
+  };
 }
 
 /**
@@ -115,36 +131,17 @@ export function addClipboardCopyToRow(row: HTMLTableRowElement) {
  */
 export function insertHeaderCell(row, label) {
   const th = document.createElement('th');
-  th.innerHTML = label;
+  th.textContent = label;
   row.appendChild(th);
 }
 
 /**
- * Create a radio button element
- * @param {HTMLElement} target target element
- * @param {String} groupName group for consecutive added radio buttons
- * @param {String} value name of the radio button
- * @param {boolean} checked check the radio button
- */
-export function addRadioButton(target, groupName, value, checked) {
-  const radio = document.createElement('div');
-  radio.innerHTML = `<div class="form-check">
-    <input class="form-check-input" type="radio" id="${value}" name="${groupName}" value="${value}"
-        ${checked ? 'checked' : ''}>
-    <label class="form-check-label" for="${value}">
-      ${value}
-    </label>
-  </div>`;
-  target.appendChild(radio);
-}
-
-/**
- * Create a list of option elements
- * @param {HTMLElement} target target element (select)
+ * Create a list of option elements for select element
+ * @param {HTMLSelectElement} target target element (select)
  * @param {array} options Array of strings to be filled as options
  */
-export function setOptions(target, options) {
-  target.innerHTML = '';
+export function setOptions(target: HTMLSelectElement, options: string[]) {
+  target.textContent = '';
   options.forEach((key) => {
     const option = document.createElement('option');
     option.text = key;
@@ -152,20 +149,25 @@ export function setOptions(target, options) {
   });
 }
 
+export function addDropDownEntries(target: HTMLUListElement, labels: Array<String>) {
+  labels.forEach((label) => {
+    addDropDownEntry(target, label);
+  })
+}
+
 /**
- * Creates a drop down item or header
+ * Add a drop down items or header to Bootstrap dropdown
  * @param {HTMLElement} target target element
- * @param {array} items array of items for the drop down
+ * @param {String} label label of items for the drop down
+ * @param {String} value (optional) additional data tag for the drop down item
  * @param {boolean} isHeader (optional) true to add a header line
  */
-export function addDropDownEntries(target, items, isHeader = false) {
-  items.forEach((value) => {
-    const li = document.createElement('li');
-    li.innerHTML = isHeader ?
-        `<h6 class="dropdown-header">${value}</h6>` :
-        `<a class="dropdown-item" href="#">${value}</a>`;
-    target.appendChild(li);
-  });
+export function addDropDownEntry(target: HTMLUListElement, label: String, isHeader: boolean = false, value?: String) {
+  const li = document.createElement('li');
+  li.innerHTML = isHeader ?
+    `<h6 class="dropdown-header" data-value='${value}'>${sanitizeHTML(label)}</h6>` :
+    `<a class="dropdown-item" data-value='${value}'>${sanitizeHTML(label)}</a>`;
+  target.appendChild(li);
 }
 
 /**
@@ -212,6 +214,15 @@ export function getAllElementsById(domObjects: object, searchRoot: DocumentFragm
 }
 
 /**
+ * Sanitizes the passed unsafeString to be safely used e.g. inside innerHTML without risking XSS.
+
+ * @param unsafeString the string to sanitize.
+ */
+export function sanitizeHTML(unsafeString: String) {
+  return DOMPurify.sanitize(unsafeString);
+}
+
+/**
  * Show an error toast
  * @param {String} message Message for toast
  * @param {String} header Header for toast
@@ -222,11 +233,11 @@ export function showError(message, header = 'Error', status = '') {
   domToast.classList.add('toast');
   domToast.innerHTML = `<div class="toast-header alert-danger">
   <i class="bi me-2 bi-exclamation-triangle-fill"></i>
-  <strong class="me-auto">${header}</strong>
+  <strong class="me-auto">${sanitizeHTML(header)}</strong>
   <small>${status}</small>
   <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
   </div>
-  <div class="toast-body">${message}</div>`;
+  <div class="toast-body">${sanitizeHTML(message)}</div>`;
 
   dom.toastContainer.appendChild(domToast);
   domToast.addEventListener("hidden.bs.toast", () => {
@@ -258,7 +269,7 @@ export function assert(condition, message, validatedElement = null) {
   }
   if (!condition) {
     if (validatedElement) {
-      validatedElement.parentNode.getElementsByClassName('invalid-feedback')[0].innerHTML = message;
+      validatedElement.parentNode.getElementsByClassName('invalid-feedback')[0].textContent = message;
       validatedElement.classList.add('is-invalid');
     } else {
       showError(message, 'Error');
@@ -291,7 +302,7 @@ let modalConfirm;
  */
 export function confirm(message, action, callback) {
   modalConfirm = modalConfirm ?? new Modal('#modalConfirm');
-  dom.modalBodyConfirm.innerHTML = message;
+  dom.modalBodyConfirm.textContent = message;
   dom.buttonConfirmed.innerText = action;
   dom.buttonConfirmed.onclick = callback;
   modalConfirm.show();
@@ -302,11 +313,12 @@ export function confirm(message, action, callback) {
  * @param {String} domId id of the dom element for the ace editor
  * @param {*} sessionMode session mode of the ace editor
  * @param {*} readOnly sets the editor to read only and removes the line numbers
+ * @param {*} wrap sets the editor wrap option.
  * @return {*} created ace editor
  */
-export function createAceEditor(domId, sessionMode, readOnly = false) {
+export function createAceEditor(domId, sessionMode, readOnly = false, wrap = false) {
   const result = ace.edit(domId);
-
+  result.setOption('wrap', wrap);
   result.session.setMode(sessionMode);
   if (readOnly) {
     result.setReadOnly(true);
@@ -341,7 +353,7 @@ export function createAutoComplete(selector, src, placeHolder) {
       highlight: true,
       element: (item, data) => {
         item.style = 'display: flex;';
-        item.innerHTML = `<span style="flex-grow: 1;" >${data.key === 'label' ? data.match : data.value.label}</span>
+        item.innerHTML = `<span style="flex-grow: 1;" >${sanitizeHTML(data.key === 'label' ? data.match : data.value.label)}</span>
             <span style="color: 3a8c9a;" class="fw-light fst-italic ms-1">
               ${data.key === 'group' ? data.match : data.value.group}</span>`;
       },
@@ -388,3 +400,48 @@ export function tableAdjustSelection(tbody: HTMLTableElement, condition: (row: H
     }
   });
 }
+
+/**
+ * JSON.stringify object, using indentation of 2
+ * @param {Object} jsonObject to stringify
+ * @return {string} JSON formatted string
+ */
+export function stringifyPretty(jsonObject: Object): string {
+  return JSON.stringify(jsonObject, null, 2);
+}
+
+/**
+ * searches the placeholder in the input field and marks it to be replaced by the user
+ * @param input dom input element
+ * @param placeholder text to search and mark
+ * @returns 
+ */
+export function checkAndMarkInInput(input: HTMLInputElement, placeholder: string) {
+  const index = input.value.indexOf(placeholder);
+  if (index >= 0) {
+    input.focus();
+    input.setSelectionRange(index, index + placeholder.length);
+    return true;
+  } else {
+    return false;
+  }
+}
+
+/**
+ * Create the counter text for two lists.
+ * if the list is empty, no counter is shown
+ * if there are two lists given of different lenght, "x/y" is shown
+ * @param badgeElement dom element for the badge
+ * @param list list to count elements
+ * @param partialList optional partial list to display x of y as "x/y"
+ */
+export function updateCounterBadge(badgeElement: HTMLSpanElement, list: Array<any>, partialList?: Array<any>) {
+  if (!partialList || partialList.length === list.length) {
+    badgeElement.textContent = list.length > 0 ? list.length.toString() : '';
+  } else {
+    badgeElement.textContent = `${partialList.length}/${list.length}`;
+  }
+}
+
+
+

@@ -135,6 +135,9 @@
   "failoverEnabled": true,
   "validateCertificates": true,
   "processorPoolSize": 5,
+  "specificConfig": {
+    "honoTenantId": "hono-tenant-id"
+  },
   "mappingDefinitions": {
     "implicitEdgeThingCreation": {
       "mappingEngine": "ImplicitThingCreation",

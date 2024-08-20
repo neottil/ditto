@@ -24,6 +24,21 @@ import java.util.Set;
 
 import javax.annotation.Nullable;
 
+import org.apache.pekko.Done;
+import org.apache.pekko.actor.AbstractActorWithTimers;
+import org.apache.pekko.actor.ActorRef;
+import org.apache.pekko.actor.Cancellable;
+import org.apache.pekko.actor.CoordinatedShutdown;
+import org.apache.pekko.actor.Props;
+import org.apache.pekko.actor.Terminated;
+import org.apache.pekko.japi.pf.PFBuilder;
+import org.apache.pekko.japi.pf.ReceiveBuilder;
+import org.apache.pekko.pattern.Patterns;
+import org.apache.pekko.stream.KillSwitch;
+import org.apache.pekko.stream.SourceRef;
+import org.apache.pekko.stream.javadsl.Keep;
+import org.apache.pekko.stream.javadsl.Sink;
+import org.apache.pekko.stream.javadsl.SourceQueueWithComplete;
 import org.eclipse.ditto.base.model.acks.AcknowledgementLabel;
 import org.eclipse.ditto.base.model.acks.AcknowledgementLabelNotDeclaredException;
 import org.eclipse.ditto.base.model.acks.AcknowledgementLabelNotUniqueException;
@@ -55,6 +70,8 @@ import org.eclipse.ditto.edge.service.acknowledgements.things.ThingCommandRespon
 import org.eclipse.ditto.edge.service.acknowledgements.things.ThingLiveCommandAckRequestSetter;
 import org.eclipse.ditto.edge.service.acknowledgements.things.ThingModifyCommandAckRequestSetter;
 import org.eclipse.ditto.edge.service.placeholders.EntityIdPlaceholder;
+import org.eclipse.ditto.edge.service.placeholders.FeaturePlaceholder;
+import org.eclipse.ditto.edge.service.placeholders.ThingPlaceholder;
 import org.eclipse.ditto.edge.service.streaming.StreamingSubscriptionManager;
 import org.eclipse.ditto.gateway.api.GatewayInternalErrorException;
 import org.eclipse.ditto.gateway.api.GatewayWebsocketSessionAbortedException;
@@ -73,10 +90,12 @@ import org.eclipse.ditto.gateway.service.util.config.streaming.StreamingConfig;
 import org.eclipse.ditto.internal.utils.pekko.logging.DittoLoggerFactory;
 import org.eclipse.ditto.internal.utils.pekko.logging.ThreadSafeDittoLoggingAdapter;
 import org.eclipse.ditto.internal.utils.pubsub.StreamingType;
+import org.eclipse.ditto.internal.utils.pubsub.extractors.ReadSubjectExtractor;
 import org.eclipse.ditto.internal.utils.pubsubthings.DittoProtocolSub;
 import org.eclipse.ditto.internal.utils.search.SubscriptionManager;
 import org.eclipse.ditto.jwt.model.ImmutableJsonWebToken;
 import org.eclipse.ditto.messages.model.signals.commands.MessageCommand;
+import org.eclipse.ditto.placeholders.PlaceholderFactory;
 import org.eclipse.ditto.placeholders.TimePlaceholder;
 import org.eclipse.ditto.policies.model.signals.announcements.PolicyAnnouncement;
 import org.eclipse.ditto.protocol.placeholders.ResourcePlaceholder;
@@ -87,21 +106,6 @@ import org.eclipse.ditto.rql.query.filter.QueryFilterCriteriaFactory;
 import org.eclipse.ditto.thingsearch.model.signals.commands.ThingSearchCommand;
 import org.eclipse.ditto.thingsearch.model.signals.events.SubscriptionEvent;
 
-import org.apache.pekko.Done;
-import org.apache.pekko.actor.AbstractActorWithTimers;
-import org.apache.pekko.actor.ActorRef;
-import org.apache.pekko.actor.Cancellable;
-import org.apache.pekko.actor.CoordinatedShutdown;
-import org.apache.pekko.actor.Props;
-import org.apache.pekko.actor.Terminated;
-import org.apache.pekko.japi.pf.PFBuilder;
-import org.apache.pekko.japi.pf.ReceiveBuilder;
-import org.apache.pekko.pattern.Patterns;
-import org.apache.pekko.stream.KillSwitch;
-import org.apache.pekko.stream.SourceRef;
-import org.apache.pekko.stream.javadsl.Keep;
-import org.apache.pekko.stream.javadsl.Sink;
-import org.apache.pekko.stream.javadsl.SourceQueueWithComplete;
 import scala.PartialFunction;
 
 /**
@@ -138,6 +142,7 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
     private final Set<AcknowledgementLabel> declaredAcks;
     private final ThreadSafeDittoLoggingAdapter logger;
     private AuthorizationContext authorizationContext;
+    private List<String> namespaces;
 
     private Cancellable cancellableShutdownTask;
     @Nullable private final KillSwitch killSwitch;
@@ -164,6 +169,7 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
         this.jwtAuthenticationResultProvider = jwtAuthenticationResultProvider;
         outstandingSubscriptionAcks = EnumSet.noneOf(StreamingType.class);
         authorizationContext = connect.getConnectionAuthContext();
+        namespaces = connect.getNamespaces();
         killSwitch = connect.getKillSwitch().orElse(null);
         streamingSessions = new EnumMap<>(StreamingType.class);
         ackregatorStarter = AcknowledgementAggregatorActorStarter.of(getContext(),
@@ -314,7 +320,6 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
                     @Nullable final var session = streamingSessions.get(streamingType);
                     if (null != session && isSessionAllowedToReceiveSignal(signal, session, streamingType)) {
                         final ThreadSafeDittoLoggingAdapter l = logger.withCorrelationId(signal);
-                        l.info("Publishing Signal of type <{}> in <{}> session", signal.getType(), type);
                         l.debug("Publishing Signal of type <{}> in <{}> session: {}", type, signal.getType(), signal);
 
                         final DittoHeaders sessionHeaders = DittoHeaders.newBuilder()
@@ -374,6 +379,7 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
                 })
                 .match(StartStreaming.class, startStreaming -> {
                     authorizationContext = startStreaming.getAuthorizationContext();
+                    namespaces = startStreaming.getNamespaces();
                     Criteria criteria;
                     try {
                         criteria = startStreaming.getFilter()
@@ -400,7 +406,10 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
                     final var subscribeConfirmation = new ConfirmSubscription(startStreaming.getStreamingType());
                     final Collection<StreamingType> currentStreamingTypes = streamingSessions.keySet();
                     dittoProtocolSub.subscribe(currentStreamingTypes,
-                            authorizationContext.getAuthorizationSubjectIds(),
+                            ReadSubjectExtractor.determineTopicsFor(
+                                    startStreaming.getNamespaces(),
+                                    authorizationContext.getAuthorizationSubjects()
+                            ),
                             getSelf()
                     ).whenComplete((ack, throwable) -> {
                         if (null == throwable) {
@@ -445,7 +454,12 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
                         case LIVE_COMMANDS, LIVE_EVENTS, MESSAGES:
                         default:
                             dittoProtocolSub.updateLiveSubscriptions(currentStreamingTypes,
-                                            authorizationContext.getAuthorizationSubjectIds(), getSelf())
+                                            ReadSubjectExtractor.determineTopicsFor(
+                                                    namespaces,
+                                                    authorizationContext.getAuthorizationSubjects()
+                                            ),
+                                            getSelf()
+                                    )
                                     .thenAccept(ack -> getSelf().tell(unsubscribeConfirmation, getSelf()));
                     }
                 })
@@ -788,8 +802,11 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
                 RqlPredicateParser.getInstance(),
                 TopicPathPlaceholder.getInstance(),
                 EntityIdPlaceholder.getInstance(),
+                ThingPlaceholder.getInstance(),
+                FeaturePlaceholder.getInstance(),
                 ResourcePlaceholder.getInstance(),
-                TimePlaceholder.getInstance()
+                TimePlaceholder.getInstance(),
+                PlaceholderFactory.newHeadersPlaceholder()
         );
 
         return queryFilterCriteriaFactory.filterCriteria(filter, dittoHeaders);
@@ -818,7 +835,11 @@ final class StreamingSessionActor extends AbstractActorWithTimers {
 
     private void resubscribe(final Control trigger) {
         if (!streamingSessions.isEmpty() && outstandingSubscriptionAcks.isEmpty()) {
-            dittoProtocolSub.subscribe(streamingSessions.keySet(), authorizationContext.getAuthorizationSubjectIds(),
+            dittoProtocolSub.subscribe(streamingSessions.keySet(),
+                    ReadSubjectExtractor.determineTopicsFor(
+                            namespaces,
+                            authorizationContext.getAuthorizationSubjects()
+                    ),
                     getSelf(), null, true);
         }
         startSubscriptionRefreshTimer();

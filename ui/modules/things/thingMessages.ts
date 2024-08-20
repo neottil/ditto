@@ -36,6 +36,7 @@ let aceResponse;
  */
 export async function ready() {
   Environments.addChangeListener(onEnvironmentChanged);
+  Things.addChangeListener(onThingChanged);
 
   Utils.addTab(
       document.getElementById('tabItemsThing'),
@@ -86,7 +87,7 @@ export async function ready() {
       dom.inputThingMessageTemplate.value = event.target.textContent;
       dom.inputThingMessageSubject.value = template.subject;
       dom.inputThingMessageTimeout.value = template.timeout;
-      acePayload.setValue(JSON.stringify(template.payload, null, 2), -1);
+      acePayload.setValue(Utils.stringifyPretty(template.payload), -1);
       acePayload.session.getUndoManager().markClean();
     }
   });
@@ -108,22 +109,31 @@ export async function ready() {
  * Calls Ditto to send a message with the parameters of the fields in the UI
  */
 function messageThing() {
-  const payload = acePayload && acePayload.getValue().length > 0 && JSON.parse(acePayload.getValue());
+  let payload: any;
+  if (acePayload && acePayload.getValue().length > 0) {
+    payload = JSON.parse(acePayload.getValue());
+  } else {
+    payload = null;
+  }
   aceResponse.setValue('');
   API.callDittoREST('POST', '/things/' + Things.theThing.thingId +
-      '/inbox/messages/' + dom.inputThingMessageSubject.value +
-      '?timeout=' + dom.inputThingMessageTimeout.value,
-  payload,
+    '/inbox/messages/' + dom.inputThingMessageSubject.value +
+    '?timeout=' + dom.inputThingMessageTimeout.value,
+    payload,
+    null,
+    false,
+    false,
+    true
   ).then((data) => {
     dom.buttonThingMessageSend.classList.remove('busy');
     dom.buttonThingMessageSend.disabled = false;
     if (dom.inputThingMessageTimeout.value > 0) {
-      aceResponse.setValue(JSON.stringify(data, null, 2), -1);
+      aceResponse.setValue(Utils.stringifyPretty(data), -1);
     }
   }).catch((err) => {
     dom.buttonThingMessageSend.classList.remove('busy');
     dom.buttonThingMessageSend.disabled = false;
-    aceResponse.setValue('');
+    aceResponse.setValue(`Error: ${err}`);
   });
 }
 
@@ -143,16 +153,23 @@ function clearAllFields() {
   dom.inputThingMessageTimeout.value = '10';
   acePayload.setValue('');
   aceResponse.setValue('');
-  dom.ulThingMessageTemplates.innerHTML = '';
+  dom.ulThingMessageTemplates.textContent = '';
+  dom.buttonThingMessageSend.disabled = Things.theThing === null;
 }
 
 function refillTemplates() {
-  dom.ulThingMessageTemplates.innerHTML = '';
-  Utils.addDropDownEntries(dom.ulThingMessageTemplates, ['Saved message templates'], true);
+  dom.ulThingMessageTemplates.textContent = '';
+  Utils.addDropDownEntry(dom.ulThingMessageTemplates, 'Saved message templates', true);
   if (Environments.current().messageTemplates['/']) {
     Utils.addDropDownEntries(
         dom.ulThingMessageTemplates,
         Object.keys(Environments.current().messageTemplates['/']),
     );
+  }
+}
+
+function onThingChanged(thing, isNewThing: boolean) {
+  if (!thing || isNewThing) {
+    clearAllFields();
   }
 }

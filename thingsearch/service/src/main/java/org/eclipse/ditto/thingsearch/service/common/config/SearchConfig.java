@@ -12,6 +12,8 @@
  */
 package org.eclipse.ditto.thingsearch.service.common.config;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -53,9 +55,24 @@ public interface SearchConfig extends ServiceSpecificConfig, WithHealthCheckConf
      * Returns how simple fields are mapped during query parsing.
      *
      * @return the simple field mapping.
-     * @since 3.0.0
      */
     Map<String, String> getSimpleFieldMappings();
+
+    /**
+     * Returns the operator metrics configuration containing metrics to be exposed via Prometheus based on configured
+     * search "count" queries.
+     *
+     * @return the operator metrics configuration.
+     */
+    OperatorMetricsConfig getOperatorMetricsConfig();
+
+    /*
+     * Returns a map of fields scoped by namespaces that will be explicitly included in the search index.
+     *
+     * @return the search projection fields.
+     * @since 3.5.0
+     */
+    List<NamespaceSearchIndexConfig> getNamespaceIndexedFields();
 
     /**
      * An enumeration of the known config path expressions and their associated default values for SearchConfig.
@@ -83,7 +100,14 @@ public interface SearchConfig extends ServiceSpecificConfig, WithHealthCheckConf
                 "definition", "/definition",
                 "_metadata", "/_metadata"
                 )
-        ));
+        )),
+
+        /**
+         * Any fields to include in the search index, scoped by namespace.
+         *
+         * @since 3.5.0
+         */
+        NAMESPACE_INDEXED_FIELDS("namespace-indexed-fields", Collections.emptyList());
 
         private final String path;
         private final Object defaultValue;

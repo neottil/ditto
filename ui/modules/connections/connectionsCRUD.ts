@@ -69,7 +69,7 @@ function onScriptEditorBlur(scriptEditor, fieldName) {
     const editConnection = JSON.parse(connectionEditor.getValue());
     initializeMappings(editConnection);
     editConnection.mappingDefinitions.javascript.options[fieldName] = scriptEditor.getValue();
-    connectionEditor.setValue(JSON.stringify(editConnection, null, 2), -1);
+    connectionEditor.setValue(Utils.stringifyPretty(editConnection), -1);
   };
 
   function initializeMappings(connection) {
@@ -96,8 +96,6 @@ function onConnectionEditorInput() {
 
 function onConnectionEditorChangeAnnotation() {
   hasErrors = connectionEditor.getSession().getAnnotations().filter((a) => a.type === 'error').length > 0;
-  incomingEditor.setReadOnly(hasErrors);
-  outgoingEditor.setReadOnly(hasErrors);
 }
 
 function onUpdateConnectionClick() {
@@ -162,7 +160,7 @@ function setConnection(connection) {
   outgoingEditor.setValue('');
   if (theConnection) {
     dom.crudConnection.idValue = theConnection.id ? theConnection.id : null;
-    connectionEditor.setValue(JSON.stringify(theConnection, null, 2), -1);
+    connectionEditor.setValue(Utils.stringifyPretty(theConnection), -1);
     if (theConnection.mappingDefinitions && theConnection.mappingDefinitions.javascript) {
       incomingEditor.setValue(theConnection.mappingDefinitions.javascript.options.incomingScript, -1);
       outgoingEditor.setValue(theConnection.mappingDefinitions.javascript.options.outgoingScript, -1);

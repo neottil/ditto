@@ -17,6 +17,7 @@ import static org.eclipse.ditto.base.model.common.ConditionChecker.checkNotNull;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -25,14 +26,16 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 import org.eclipse.ditto.base.model.entity.id.EntityId;
+import org.eclipse.ditto.base.model.headers.DittoHeaderDefinition;
 import org.eclipse.ditto.base.model.headers.DittoHeaders;
+import org.eclipse.ditto.base.model.headers.DittoHeadersBuilder;
 import org.eclipse.ditto.base.model.signals.Signal;
 import org.eclipse.ditto.base.model.signals.WithResource;
-import org.eclipse.ditto.internal.utils.pekko.logging.DittoLoggerFactory;
-import org.eclipse.ditto.internal.utils.pekko.logging.ThreadSafeDittoLogger;
 import org.eclipse.ditto.internal.utils.cache.Cache;
 import org.eclipse.ditto.internal.utils.cache.CacheFactory;
 import org.eclipse.ditto.internal.utils.cache.config.CacheConfig;
+import org.eclipse.ditto.internal.utils.pekko.logging.DittoLoggerFactory;
+import org.eclipse.ditto.internal.utils.pekko.logging.ThreadSafeDittoLogger;
 import org.eclipse.ditto.json.JsonFactory;
 import org.eclipse.ditto.json.JsonFieldSelector;
 import org.eclipse.ditto.json.JsonObject;
@@ -52,15 +55,16 @@ import org.eclipse.ditto.things.model.signals.events.ThingMerged;
  * Instantiated once per cluster node so that it builds up a cache across all signal enrichments on a local cluster
  * node.
  */
-public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEnrichmentFacade {
+public class DittoCachingSignalEnrichmentFacade implements CachingSignalEnrichmentFacade {
 
-    private static final ThreadSafeDittoLogger LOGGER = DittoLoggerFactory
-            .getThreadSafeLogger(DittoCachingSignalEnrichmentFacade.class);
+    private static final ThreadSafeDittoLogger LOGGER =
+            DittoLoggerFactory.getThreadSafeLogger(DittoCachingSignalEnrichmentFacade.class);
     private static final String CACHE_NAME_SUFFIX = "_signal_enrichment_cache";
 
-    private final Cache<SignalEnrichmentCacheKey, JsonObject> extraFieldsCache;
+    protected final Cache<SignalEnrichmentCacheKey, JsonObject> extraFieldsCache;
 
-    private DittoCachingSignalEnrichmentFacade(final SignalEnrichmentFacade cacheLoaderFacade,
+    protected DittoCachingSignalEnrichmentFacade(
+            final SignalEnrichmentFacade cacheLoaderFacade,
             final CacheConfig cacheConfig,
             final Executor cacheLoaderExecutor,
             final String cacheNamePrefix) {
@@ -93,20 +97,45 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
 
     @Override
     public CompletionStage<JsonObject> retrieveThing(final ThingId thingId, final List<ThingEvent<?>> events,
-            final long minAcceptableSeqNr) {
+            final long atRevisionNumber) {
 
-        final DittoHeaders dittoHeaders = DittoHeaders.empty();
-        if (minAcceptableSeqNr < 0) {
-            final var cacheKey =
-                    SignalEnrichmentCacheKey.of(thingId, SignalEnrichmentContext.of(dittoHeaders, null));
+        final DittoHeaders dittoHeadersNotAddedToCacheKey =
+                buildDittoHeadersNotAddedToCacheKey(events, atRevisionNumber);
+
+        final JsonFieldSelector fieldSelector = determineSelector(thingId.getNamespace());
+
+        if (atRevisionNumber < 0) {
+            final var cacheKey = SignalEnrichmentCacheKey.of(
+                    thingId,
+                    SignalEnrichmentContext.of(DittoHeaders.empty(), dittoHeadersNotAddedToCacheKey, fieldSelector));
             extraFieldsCache.invalidate(cacheKey);
-            return doCacheLookup(cacheKey, dittoHeaders);
+            return doCacheLookup(cacheKey, dittoHeadersNotAddedToCacheKey);
         } else {
             final var cachingParameters =
-                    new CachingParameters(null, events, false, minAcceptableSeqNr);
+                    new CachingParameters(fieldSelector, events, false, atRevisionNumber);
 
-            return doRetrievePartialThing(thingId, dittoHeaders, cachingParameters);
+            return doRetrievePartialThing(thingId, DittoHeaders.empty(), dittoHeadersNotAddedToCacheKey,
+                    cachingParameters);
         }
+    }
+
+    private static DittoHeaders buildDittoHeadersNotAddedToCacheKey(final List<ThingEvent<?>> events,
+            final long atRevisionNumber) {
+        final DittoHeadersBuilder<?, ?> dittoHeadersBuilder = DittoHeaders.newBuilder();
+        if (!events.isEmpty()) {
+            dittoHeadersBuilder.correlationId(
+                    events.get(events.size() - 1)
+                            .getDittoHeaders()
+                            .getCorrelationId()
+                            .orElseGet(() -> UUID.randomUUID().toString())
+                            + "-enrichment"
+            );
+        }
+        if (atRevisionNumber > 0) {
+            dittoHeadersBuilder
+                    .putHeader(DittoHeaderDefinition.AT_HISTORICAL_REVISION.getKey(), String.valueOf(atRevisionNumber));
+        }
+        return dittoHeadersBuilder.build();
     }
 
     @Override
@@ -122,7 +151,7 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         final var cachingParameters =
                 new CachingParameters(jsonFieldSelector, thingEvents, true, 0);
 
-        return doRetrievePartialThing(thingId, dittoHeaders, cachingParameters)
+        return doRetrievePartialThing(thingId, dittoHeaders, null, cachingParameters)
                 .thenApply(jsonObject -> applyJsonFieldSelector(jsonObject, jsonFieldSelector));
     }
 
@@ -137,7 +166,7 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
      * @param minAcceptableSeqNr minimum sequence number of the concerned signals to not invalidate the cache.
      * @return future that completes with the parts of a thing or fails with an error.
      */
-    @SuppressWarnings("java:S1612")
+    @SuppressWarnings({"java:S1612", "unused"})
     public CompletionStage<JsonObject> retrievePartialThing(final EntityId thingId,
             final JsonFieldSelector jsonFieldSelector,
             final DittoHeaders dittoHeaders,
@@ -153,19 +182,22 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         final var cachingParameters =
                 new CachingParameters(jsonFieldSelector, thingEvents, true, minAcceptableSeqNr);
 
-        return doRetrievePartialThing(thingId, dittoHeaders, cachingParameters)
+        return doRetrievePartialThing(thingId, dittoHeaders, null, cachingParameters)
                 .thenApply(jsonObject -> applyJsonFieldSelector(jsonObject, jsonFieldSelector));
     }
 
-    private CompletionStage<JsonObject> doRetrievePartialThing(final EntityId thingId,
+    protected CompletionStage<JsonObject> doRetrievePartialThing(final EntityId thingId,
             final DittoHeaders dittoHeaders,
+            @Nullable final DittoHeaders dittoHeadersNotAddedToCacheKey,
             final CachingParameters cachingParameters) {
 
         final var fieldSelector = cachingParameters.fieldSelector;
         final JsonFieldSelector enhancedFieldSelector = enhanceFieldSelectorWithRevision(fieldSelector);
 
-        final var idWithResourceType =
-                SignalEnrichmentCacheKey.of(thingId, SignalEnrichmentContext.of(dittoHeaders, enhancedFieldSelector));
+        final var idWithResourceType = SignalEnrichmentCacheKey.of(
+                thingId,
+                SignalEnrichmentContext.of(dittoHeaders, dittoHeadersNotAddedToCacheKey, enhancedFieldSelector)
+        );
 
         final var cachingParametersWithEnhancedFieldSelector = new CachingParameters(enhancedFieldSelector,
                 cachingParameters.concernedEvents,
@@ -219,8 +251,9 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
                 final var nextExpectedThingEventsParameters =
                         new CachingParameters(fieldSelector, thingEvents, invalidateCacheOnPolicyChange,
                                 cachingParameters.minAcceptableSeqNr);
-                result = handleNextExpectedThingEvents(cacheKey, JsonObject.empty(), nextExpectedThingEventsParameters)
-                        .toCompletableFuture();
+                result = doCacheLookup(cacheKey, dittoHeaders).thenCompose(
+                        cachedJsonObject -> handleNextExpectedThingEvents(cacheKey, cachedJsonObject,
+                                nextExpectedThingEventsParameters));
             } else {
                 // there are twin events; perform smart update
                 result = doCacheLookup(cacheKey, dittoHeaders).thenCompose(
@@ -277,7 +310,7 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         }
     }
 
-    private CompletableFuture<JsonObject> doCacheLookup(final SignalEnrichmentCacheKey cacheKey,
+    protected CompletableFuture<JsonObject> doCacheLookup(final SignalEnrichmentCacheKey cacheKey,
             final DittoHeaders dittoHeaders) {
         LOGGER.withCorrelationId(dittoHeaders).debug("Looking up cache entry for <{}>", cacheKey);
 
@@ -339,16 +372,11 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         JsonObject jsonObject = cachedJsonObject;
         for (final ThingEvent<?> thingEvent : concernedSignals) {
 
-            switch (thingEvent.getCommandCategory()) {
-                case MERGE:
-                    jsonObject = getMergeJsonObject(jsonObject, thingEvent);
-                    break;
-                case DELETE:
-                    jsonObject = getDeleteJsonObject(jsonObject, thingEvent);
-                    break;
-                default:
-                    jsonObject = getDefaultJsonObject(jsonObject, thingEvent);
-            }
+            jsonObject = switch (thingEvent.getCommandCategory()) {
+                case MERGE -> getMergeJsonObject(jsonObject, thingEvent);
+                case DELETE -> getDeleteJsonObject(jsonObject, thingEvent);
+                default -> getDefaultJsonObject(jsonObject, thingEvent);
+            };
             // invalidate cache on policy change if the flag is set
             if (cachingParameters.invalidateCacheOnPolicyChange) {
                 final var optionalCompletionStage =
@@ -388,7 +416,8 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         } else if (resourcePath.isEmpty()) {
             result = JsonObject.empty();
         } else {
-            result = jsonObject.remove(resourcePath).remove(Thing.JsonFields.METADATA.getPointer().append(resourcePath));
+            result =
+                    jsonObject.remove(resourcePath).remove(Thing.JsonFields.METADATA.getPointer().append(resourcePath));
         }
 
         return result;
@@ -445,14 +474,20 @@ public final class DittoCachingSignalEnrichmentFacade implements CachingSignalEn
         return applyJsonFieldSelector(jsonObjectBuilder.build(), enhancedFieldSelector);
     }
 
-    private static final class CachingParameters {
+    @Nullable
+    protected JsonFieldSelector determineSelector(final String namespace) {
+        // By default, we do not return a field selector.
+        return null;
+    }
+
+    protected static final class CachingParameters {
 
         @Nullable private final JsonFieldSelector fieldSelector;
         private final List<ThingEvent<?>> concernedEvents;
         private final boolean invalidateCacheOnPolicyChange;
         private final long minAcceptableSeqNr;
 
-        private CachingParameters(@Nullable final JsonFieldSelector fieldSelector,
+        public CachingParameters(@Nullable final JsonFieldSelector fieldSelector,
                 final List<ThingEvent<?>> concernedEvents,
                 final boolean invalidateCacheOnPolicyChange,
                 final long minAcceptableSeqNr) {

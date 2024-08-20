@@ -12,14 +12,14 @@
  * SPDX-License-Identifier: EPL-2.0
  */
 
-import {JSONPath} from 'jsonpath-plus';
+import { JSONPath } from 'jsonpath-plus';
 import * as API from '../api.js';
 /* eslint-disable comma-dangle */
 /* eslint-disable new-cap */
 import * as Utils from '../utils.js';
+import featuresHTML from './features.html';
 import * as Fields from './fields.js';
 import * as Things from './things.js';
-import featuresHTML from './features.html';
 
 const observers = [];
 
@@ -176,12 +176,12 @@ function updateFeatureEditors(featureJson) {
   if (featureJson) {
     dom.inputFeatureDefinition.value = featureJson['definition'] ? featureJson.definition : null;
     if (featureJson['properties']) {
-      featurePropertiesEditor.setValue(JSON.stringify(featureJson.properties, null, 4), -1);
+      featurePropertiesEditor.setValue(Utils.stringifyPretty(featureJson.properties), -1);
     } else {
       featurePropertiesEditor.setValue('');
     }
     if (featureJson['desiredProperties']) {
-      featureDesiredPropertiesEditor.setValue(JSON.stringify(featureJson.desiredProperties, null, 4), -1);
+      featureDesiredPropertiesEditor.setValue(Utils.stringifyPretty(featureJson.desiredProperties), -1);
     } else {
       featureDesiredPropertiesEditor.setValue('');
     }
@@ -201,7 +201,7 @@ function updateFeatureEditors(featureJson) {
  */
 function refreshFeature(thing, featureId = null) {
   if (!dom.crudFeature.isEditing) {
-    if (thing) {
+    if (thing && thing['features'] && featureId) {
       dom.crudFeature.idValue = featureId;
       updateFeatureEditors(thing.features[featureId]);
     } else {
@@ -219,7 +219,7 @@ function refreshFeature(thing, featureId = null) {
 function onThingChanged(thing) {
   dom.crudFeature.editDisabled = (thing === null);
   // Update features table
-  dom.tbodyFeatures.innerHTML = '';
+  dom.tbodyFeatures.textContent = '';
   let count = 0;
   let thingHasFeature = false;
   if (thing && thing.features) {
@@ -234,8 +234,7 @@ function onThingChanged(thing) {
   }
   dom.badgeFeatureCount.textContent = count > 0 ? count : '';
   if (!thingHasFeature) {
-    dom.crudFeature.idValue = null;
-    updateFeatureEditors(null);
+    refreshFeature(thing, null);
   }
 }
 

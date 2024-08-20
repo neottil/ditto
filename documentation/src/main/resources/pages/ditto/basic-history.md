@@ -109,8 +109,10 @@ This API is however **only available for things** (not for policies).
 Use the following query parameters in order to specify the start/stop revision/timestamp.
 
 Either use the revision based parameters:
-* `from-historical-revision`: specifies the revision number to start streaming historical modification events from
-* `to-historical-revision`: optionally specifies the revision number to stop streaming at (if omitted, it streams events until the current state of the entity)
+* `from-historical-revision`: Specifies the revision number to start streaming historical modification events from.
+  May also be negative in order to specify to get the last `n` revisions relative to the `to-historical-revision`.
+* `to-historical-revision`: Optionally specifies the revision number to stop streaming at (if omitted, it streams events until the current state of the entity). 
+  May also be 0 or negative in order to specify to get either the latest (`0`) or the `n`th most recent revision.
 
 Alternatively, use the timestamp based parameters:
 * `from-historical-timestamp`: specifies the timestamp to start streaming historical modification events from
@@ -136,6 +138,27 @@ curl --http2 -u ditto:ditto -H 'Accept:text/event-stream' -N \
 # stream specific history range, additionally selecting _context in "fields" which contains the historical headers:
 curl --http2 -u ditto:ditto -H 'Accept:text/event-stream' -N \
   http://localhost:8080/api/2/things/org.eclipse.ditto:thing-2?from-historical-revision=0&fields=thingId,attributes,features,_revision,_modified,_context
+```
+
+#### Filtering streamed historical events for things via SEE
+
+When streaming historical events for [things](basic-thing.html), an optional `filter` in form of an
+[RQL](basic-rql.html) may be declared in order to only receive thing events matching the defined query.
+
+This can e.g. be useful to only stream events in which a certain feature or a certain property/attribute was included.
+
+In addition to the parameters selecting from/to revision or timestamp, the following parameter can be defined:
+* `filter`: specifies the [RQL](basic-rql.html) filter which events to return in the stream must match
+
+Examples:
+```bash
+# stream complete history starting from earliest available revision of a thing, but only those where a feature "bamboo" was modified:
+curl --http2 -u ditto:ditto -H 'Accept:text/event-stream' -N \
+  http://localhost:8080/api/2/things/org.eclipse.ditto:thing-2?from-historical-revision=0&fields=thingId,attributes,features,_revision,_modified&filter=exists(features/bamboo)
+
+# stream specific history range of a thing based on timestamps, filtering for temperature values of a sensor being greater than 50:
+curl --http2 -u ditto:ditto -H 'Accept:text/event-stream' -N \
+  http://localhost:8080/api/2/things/org.eclipse.ditto:thing-2?from-historical-timestamp=2022-10-24T11:44:36Z&to-historical-timestamp=2022-10-24T11:44:37Z&fields=thingId,attributes,features,_revision,_modified&filter=gt(features/temperature/properties/value,50)
 ```
 
 ### Streaming historical events via Ditto Protocol
@@ -218,6 +241,24 @@ It will do so either until all existing events were sent, in that case a `comple
 
 Or it will stop after the `demand` was fulfilled, waiting for the requester to claim more demand with a new `request` 
 message.
+
+#### Filtering streamed historical events for things via Ditto Protocol
+
+The `filter` for streaming historical thing events may also be specified via Ditto Protocol.
+
+Example protocol message for subscribing for the persisted events of a thing with a `filter`:
+```json
+{
+  "topic": "org.eclipse.ditto/thing-2/things/twin/streaming/subscribeForPersistedEvents",
+  "path": "/",
+  "headers": {},
+  "value": {
+    "fromHistoricalRevision": 1,
+    "toHistoricalRevision": 10,
+    "filter": "exists(features/bamboo)"
+  }
+}
+```
 
 
 ## Configuring historical headers to persist

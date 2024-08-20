@@ -94,7 +94,7 @@ export async function ready() {
       dom.inputMessageTemplate.value = event.target.textContent;
       dom.inputMessageSubject.value = template.subject;
       dom.inputMessageTimeout.value = template.timeout;
-      acePayload.setValue(JSON.stringify(template.payload, null, 2), -1);
+      acePayload.setValue(Utils.stringifyPretty(template.payload), -1);
       acePayload.session.getUndoManager().markClean();
     }
   });
@@ -116,23 +116,32 @@ export async function ready() {
  * Calls Ditto to send a message with the parameters of the fields in the UI
  */
 function messageFeature() {
-  const payload = acePayload && acePayload.getValue().length > 0 && JSON.parse(acePayload.getValue());
+  let payload: any;
+  if (acePayload && acePayload.getValue().length > 0) {
+    payload = JSON.parse(acePayload.getValue());
+  } else {
+    payload = null;
+  }
   aceResponse.setValue('');
   API.callDittoREST('POST', '/things/' + Things.theThing.thingId +
-      '/features/' + theFeatureId +
-      '/inbox/messages/' + dom.inputMessageSubject.value +
-      '?timeout=' + dom.inputMessageTimeout.value,
-  payload,
+    '/features/' + theFeatureId +
+    '/inbox/messages/' + dom.inputMessageSubject.value +
+    '?timeout=' + dom.inputMessageTimeout.value,
+    payload,
+    null,
+    false,
+    false,
+    true
   ).then((data) => {
     dom.buttonMessageSend.classList.remove('busy');
     dom.buttonMessageSend.disabled = false;
     if (dom.inputMessageTimeout.value > 0) {
-      aceResponse.setValue(JSON.stringify(data, null, 2), -1);
+      aceResponse.setValue(Utils.stringifyPretty(data), -1);
     }
   }).catch((err) => {
     dom.buttonMessageSend.classList.remove('busy');
     dom.buttonMessageSend.disabled = false;
-    aceResponse.setValue('');
+    aceResponse.setValue(`Error: ${err}`);
   });
 }
 
@@ -154,12 +163,13 @@ function clearAllFields() {
   dom.inputMessageTimeout.value = '10';
   acePayload.setValue('');
   aceResponse.setValue('');
-  dom.ulMessageTemplates.innerHTML = '';
+  dom.ulMessageTemplates.textContent = '';
+  dom.buttonMessageSend.disabled = !theFeatureId || theFeatureId === '';
 }
 
 function refillTemplates() {
-  dom.ulMessageTemplates.innerHTML = '';
-  Utils.addDropDownEntries(dom.ulMessageTemplates, ['Saved message templates'], true);
+  dom.ulMessageTemplates.textContent = '';
+  Utils.addDropDownEntry(dom.ulMessageTemplates, 'Saved message templates', true);
   if (theFeatureId && Environments.current().messageTemplates[theFeatureId]) {
     Utils.addDropDownEntries(
         dom.ulMessageTemplates,

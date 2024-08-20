@@ -108,7 +108,7 @@ function onThingDefinitionsClick(event) {
   Things.setTheThing(null);
   // isEditing = true;
   dom.inputThingDefinition.value = event.target.textContent;
-  thingJsonEditor.setValue(JSON.stringify(thingTemplates[event.target.textContent], null, 2), -1);
+  thingJsonEditor.setValue(Utils.stringifyPretty(thingTemplates[event.target.textContent]), -1);
 }
 
 /**
@@ -124,14 +124,14 @@ function onThingChanged(thingJson) {
   updateThingJsonEditor();
 
   function updateThingDetailsTable() {
-    dom.tbodyThingDetails.innerHTML = '';
+    dom.tbodyThingDetails.textContent = '';
     if (thingJson) {
-      Utils.addTableRow(dom.tbodyThingDetails, 'thingId', false, true, thingJson.thingId);
-      Utils.addTableRow(dom.tbodyThingDetails, 'policyId', false, true, thingJson.policyId);
-      Utils.addTableRow(dom.tbodyThingDetails, 'definition', false, true, thingJson.definition ?? '');
-      Utils.addTableRow(dom.tbodyThingDetails, 'revision', false, true, thingJson._revision);
-      Utils.addTableRow(dom.tbodyThingDetails, 'created', false, true, thingJson._created);
-      Utils.addTableRow(dom.tbodyThingDetails, 'modified', false, true, thingJson._modified);
+      Utils.addTableRow(dom.tbodyThingDetails, 'thingId', false, thingJson.thingId, thingJson.thingId);
+      Utils.addTableRow(dom.tbodyThingDetails, 'policyId', false, thingJson.policyId, thingJson.policyId);
+      Utils.addTableRow(dom.tbodyThingDetails, 'definition', false, thingJson.definition ?? ' ', thingJson.definition ?? '');
+      Utils.addTableRow(dom.tbodyThingDetails, 'revision', false, thingJson._revision, thingJson._revision);
+      Utils.addTableRow(dom.tbodyThingDetails, 'created', false, thingJson._created, thingJson._created);
+      Utils.addTableRow(dom.tbodyThingDetails, 'modified', false, thingJson._modified, thingJson._modified);
     }
   }
 
@@ -144,7 +144,7 @@ function onThingChanged(thingJson) {
       delete thingCopy['_created'];
       delete thingCopy['_modified'];
       delete thingCopy['_context'];
-      thingJsonEditor.setValue(JSON.stringify(thingCopy, null, 2), -1);
+      thingJsonEditor.setValue(Utils.stringifyPretty(thingCopy), -1);
       thingJsonEditor.session.getUndoManager().reset();
     } else {
       dom.crudThings.idValue = null;
@@ -160,7 +160,7 @@ function onEditToggle(event) {
   if (isEditing && Things.theThing) {
     API.callDittoREST('GET', `/things/${Things.theThing.thingId}`, null, null, true)
         .then((response) => {
-          eTag = response.headers.get('ETag');
+          eTag = response.headers.get('ETag').replace('W/', '');
           return response.json();
         })
         .then((thingJson) => {
@@ -181,7 +181,7 @@ function onEditToggle(event) {
 
   function initializeEditors(thingJson) {
     dom.inputThingDefinition.value = thingJson.definition ?? '';
-    thingJsonEditor.setValue(JSON.stringify(thingJson, null, 2), -1);
+    thingJsonEditor.setValue(Utils.stringifyPretty(thingJson), -1);
   }
 
   function resetEditors() {

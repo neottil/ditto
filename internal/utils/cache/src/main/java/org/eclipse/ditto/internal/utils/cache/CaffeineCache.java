@@ -17,9 +17,12 @@ import static java.util.Objects.requireNonNull;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
@@ -165,6 +168,20 @@ public class CaffeineCache<K, V> implements Cache<K, V> {
         return asyncCache.get(key, asyncLoad).thenApply(Optional::ofNullable);
     }
 
+    @Override
+    public CompletableFuture<Optional<V>> get(final K key, final Function<Throwable, Optional<V>> errorHandler) {
+        requireNonNull(key);
+
+        return asyncCache.get(key, asyncLoad).thenApply(Optional::ofNullable)
+                .exceptionally(throwable -> {
+                    if (throwable instanceof CompletionException completionException) {
+                        return errorHandler.apply(completionException.getCause());
+                    } else {
+                        return errorHandler.apply(throwable);
+                    }
+                });
+    }
+
     /**
      * Lookup a value in cache, or create it via {@code mappingFunction} and store it if the value was not cached.
      * Only available for Caffeine caches.
@@ -212,6 +229,25 @@ public class CaffeineCache<K, V> implements Cache<K, V> {
             }
         }
         return currentlyExisting;
+    }
+
+    @Override
+    public boolean invalidateConditionally(final K key, final Predicate<V> valueCondition) {
+        requireNonNull(key);
+
+        V value = synchronousCacheView.getIfPresent(key);
+        if (value != null) {
+            synchronized (value) {
+                value = synchronousCacheView.getIfPresent(key);
+                if (value != null && valueCondition.test(value)) {
+                    return invalidate(key);
+                } else {
+                    return false;
+                }
+            }
+        } else {
+            return false;
+        }
     }
 
     // optimized batch invalidation method for caffeine

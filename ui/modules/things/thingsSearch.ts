@@ -20,8 +20,8 @@ import { JSONPath } from 'jsonpath-plus';
 
 import * as API from '../api.js';
 import * as Environments from '../environments/environments.js';
-
 import * as Utils from '../utils.js';
+import { sanitizeHTML } from '../utils.js';
 import * as Fields from './fields.js';
 import * as Things from './things.js';
 import * as ThingsSSE from './thingsSSE.js';
@@ -30,6 +30,7 @@ let lastSearch = '';
 let theSearchCursor;
 
 const dom = {
+  searchFilterCount: null,
   thingsTableHead: null,
   thingsTableBody: null,
   searchFilterEdit: null,
@@ -75,12 +76,14 @@ function onThingsTableClicked(event) {
 /**
  * Tests if the search filter is an RQL. If yes, things search is called otherwise just things get
  * @param {String} filter search filter string containing an RQL or a thingId
+ * @param rqlFilterCallback a callback to invoke when the passed `filter` was a valid RQL statement
  */
-export function searchTriggered(filter) {
+export function searchTriggered(filter: string, rqlFilterCallback: () => void) {
   lastSearch = filter;
   const regex = /^(eq\(|ne\(|gt\(|ge\(|lt\(|le\(|in\(|like\(|ilike\(|exists\(|and\(|or\(|not\().*/;
   if (filter === '' || regex.test(filter)) {
     searchThings(filter);
+    rqlFilterCallback();
   } else {
     getThings([filter]);
   }
@@ -104,7 +107,7 @@ export function performLastSearch() {
   if (lastSearch === 'pinned') {
     pinnedTriggered();
   } else {
-    searchTriggered(lastSearch);
+    searchTriggered(lastSearch, () => null);
   }
 }
 
@@ -113,13 +116,15 @@ export function performLastSearch() {
  * @param {Array} thingIds Array of thingIds
  */
 export function getThings(thingIds) {
-  dom.thingsTableBody.innerHTML = '';
+  dom.searchFilterCount.textContent = '';
+  dom.thingsTableBody.textContent = '';
   const fieldsQueryParameter = Fields.getQueryParameter();
   if (thingIds.length > 0) {
     API.callDittoREST('GET',
         `/things?${fieldsQueryParameter}&ids=${thingIds}&option=sort(%2BthingId)`)
         .then((thingJsonArray) => {
           fillThingsTable(thingJsonArray);
+          dom.searchFilterCount.textContent = '#: ' + thingJsonArray.length;
           notifyAll(thingIds, fieldsQueryParameter);
         })
         .catch((error) => {
@@ -134,11 +139,30 @@ export function getThings(thingIds) {
 
 function resetAndClearViews(retainThing = false) {
   theSearchCursor = null;
-  dom.thingsTableHead.innerHTML = '';
-  dom.thingsTableBody.innerHTML = '';
+  dom.searchFilterCount.textContent = '';
+  dom.thingsTableHead.textContent = '';
+  dom.thingsTableBody.textContent = '';
   if (!retainThing) {
     Things.setTheThing(null);
   }
+}
+
+/**
+ * Calls Ditto search API to perform a count and adds the count to the UI.
+ * @param {String} filter Ditto search filter (rql)
+ */
+function countThings(filter: string) {
+  dom.searchFilterCount.textContent = '';
+  const namespaces = Environments.current().searchNamespaces
+  API.callDittoREST('GET',
+    '/search/things/count' +
+    ((filter && filter !== '') ? '?filter=' + encodeURIComponent(filter) : '') +
+    ((namespaces && namespaces !== '') ? '&namespaces=' + namespaces : ''), null, null
+  ).then((countResult) => {
+    dom.searchFilterCount.textContent = '#: ' + countResult;
+  }).catch((error) => {
+    notifyAll();
+  });
 }
 
 /**
@@ -146,7 +170,7 @@ function resetAndClearViews(retainThing = false) {
  * @param {String} filter Ditto search filter (rql)
  * @param {boolean} isMore (optional) use cursor from previous search for additional pages
  */
-function searchThings(filter, isMore = false) {
+function searchThings(filter: string, isMore = false) {
   document.body.style.cursor = 'progress';
 
   const namespaces = Environments.current().searchNamespaces;
@@ -162,6 +186,7 @@ function searchThings(filter, isMore = false) {
     if (isMore) {
       removeMoreFromThingList();
     } else {
+      countThings(filter);
       resetAndClearViews(true);
     }
     fillThingsTable(searchResult.items);
@@ -187,7 +212,7 @@ function searchThings(filter, isMore = false) {
 
   function addMoreToThingList() {
     const moreCell = dom.thingsTableBody.insertRow().insertCell(-1);
-    moreCell.innerHTML = 'load more...';
+    moreCell.textContent = 'load more...';
     moreCell.colSpan = dom.thingsTableBody.rows[0].childElementCount;
     moreCell.style.textAlign = 'center';
     moreCell.style.cursor = 'pointer';
@@ -212,7 +237,7 @@ export function removeMoreFromThingList() {
  * Fills the things table UI with the given things
  * @param {Array} thingsList Array of thing json objects
  */
-function fillThingsTable(thingsList) {
+function fillThingsTable(thingsList: any[]) {
   const activeFields = Environments.current().fieldList.filter((f) => f.active);
   fillHeaderRow();
   let thingSelected = false;
@@ -225,7 +250,7 @@ function fillThingsTable(thingsList) {
   }
 
   function fillHeaderRow() {
-    dom.thingsTableHead.innerHTML = '';
+    dom.thingsTableHead.textContent = '';
     // Utils.addCheckboxToRow(dom.thingsTableHead, 'checkboxHead', false, null);
     Utils.insertHeaderCell(dom.thingsTableHead, '');
     Utils.insertHeaderCell(dom.thingsTableHead, 'Thing ID');
@@ -244,6 +269,7 @@ function fillThingsTable(thingsList) {
         row,
         item.thingId,
         Environments.current().pinnedThings.includes(item.thingId),
+        false,
         togglePinnedThing,
     );
     Utils.addCellToRow(row, beautifyId(item.thingId), item.thingId);
@@ -302,7 +328,7 @@ export function updateTableRow(thingUpdateJson) {
         path: path,
       });
       if (elem.length !== 0) {
-        cell.innerHTML = elem[0];
+        cell.innerHTML = sanitizeHTML(elem[0]);
       }
     }
   });

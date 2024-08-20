@@ -19,6 +19,11 @@ import java.util.function.BiFunction;
 
 import javax.annotation.Nullable;
 
+import org.apache.pekko.http.javadsl.model.ContentTypes;
+import org.apache.pekko.http.javadsl.model.HttpResponse;
+import org.apache.pekko.http.javadsl.server.PathMatchers;
+import org.apache.pekko.http.javadsl.server.RequestContext;
+import org.apache.pekko.http.javadsl.server.Route;
 import org.eclipse.ditto.base.api.common.RetrieveConfig;
 import org.eclipse.ditto.base.api.devops.ImmutableLoggerConfig;
 import org.eclipse.ditto.base.api.devops.signals.commands.ChangeLogLevel;
@@ -40,12 +45,6 @@ import org.eclipse.ditto.json.JsonFactory;
 import org.eclipse.ditto.json.JsonObject;
 import org.eclipse.ditto.json.JsonPointer;
 import org.eclipse.ditto.json.JsonValue;
-
-import org.apache.pekko.http.javadsl.model.ContentTypes;
-import org.apache.pekko.http.javadsl.model.HttpResponse;
-import org.apache.pekko.http.javadsl.server.PathMatchers;
-import org.apache.pekko.http.javadsl.server.RequestContext;
-import org.apache.pekko.http.javadsl.server.Route;
 
 /**
  * Builder for creating Pekko HTTP routes for {@code /devops}.
@@ -100,12 +99,14 @@ public final class DevOpsRoute extends AbstractRoute {
      * @return the {@code /devops} route.
      * @throws NullPointerException if any argument is {@code null}.
      */
-    public Route buildDevOpsRoute(final RequestContext ctx, final Map<String, String> queryParameters) {
+    public Route buildDevOpsRoute(final RequestContext ctx, final String correlationId,
+            final Map<String, String> queryParameters) {
         checkNotNull(ctx, "ctx");
         checkNotNull(queryParameters, "queryParameters");
 
         return rawPathPrefix(PathMatchers.slash().concat(PATH_DEVOPS), () ->  // /devops
                 devOpsAuthenticationDirective.authenticateDevOps(DevOpsOAuth2AuthenticationDirective.REALM_DEVOPS,
+                        DittoHeaders.newBuilder().correlationId(correlationId).build(),
                         concat(
                                 rawPathPrefix(PathMatchers.slash().concat(PATH_LOGGING),
                                         () -> // /devops/logging
@@ -222,8 +223,9 @@ public final class DevOpsRoute extends AbstractRoute {
                 extractDataBytes(payloadSource ->
                         handlePerRequest(ctx, dittoHeaders, payloadSource,
                                 piggybackCommandJson -> {
-                                    JsonObject parsedJson = DittoJsonException.wrapJsonRuntimeException(() ->
-                                            JsonFactory.readFrom(piggybackCommandJson).asObject());
+                                    JsonObject parsedJson = DittoJsonException.wrapJsonRuntimeException(
+                                            piggybackCommandJson, dittoHeaders, (json, headers) ->
+                                                    JsonFactory.readFrom(json).asObject());
                                     parsedJson = parsedJson.set(Command.JsonFields.TYPE, ExecutePiggybackCommand.TYPE);
 
                                     // serviceName and instance from URL are preferred

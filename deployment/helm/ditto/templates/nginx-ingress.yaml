@@ -131,9 +131,9 @@ data:
 
     # ignore X-Original-URI in the request
     proxy_hide_header X-Original-URI;
-    proxy_set_header X-Original-URI $request_uri;
 
-    # set ditto-specific forwarded headers
+
+    # set ditto-specific forwarded headers - needed in the location for registry.k8s.io/ingress-nginx/controller
     proxy_set_header        X-Forwarded-User              $remote_user;
     proxy_set_header        x-ditto-pre-authenticated     "nginx:$remote_user";
 

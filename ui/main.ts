@@ -20,8 +20,15 @@ import * as ConnectionsMonitor from './modules/connections/connectionsMonitor.js
 
 import * as Authorization from './modules/environments/authorization.js';
 import * as Environments from './modules/environments/environments.js';
-import * as Operations from './modules/operations/operations.js';
+import * as Operations from './modules/operations/servicesLogging.js';
+import * as Piggyback from './modules/operations/piggyback.js';
+import * as Templates from './modules/operations/templates.js';
 import * as Policies from './modules/policies/policies.js';
+import * as PoliciesJSON from './modules/policies/policiesJSON.js';
+import * as PoliciesEntries from './modules/policies/policiesEntries.js';
+import * as PoliciesImports from './modules/policies/policiesImports.js';
+import * as PoliciesSubjects from './modules/policies/policiesSubjects';
+import * as PoliciesResources from './modules/policies/policiesResources';
 import * as Attributes from './modules/things/attributes.js';
 import * as FeatureMessages from './modules/things/featureMessages.js';
 import * as Features from './modules/things/features.js';
@@ -36,6 +43,7 @@ import * as ThingsSSE from './modules/things/thingsSSE.js';
 import { WoTDescription } from './modules/things/wotDescription.js';
 import * as Utils from './modules/utils.js';
 import './modules/utils/crudToolbar.js';
+import './modules/utils/tableFilter.js';
 
 let resized = false;
 let mainNavbar;
@@ -54,12 +62,19 @@ document.addEventListener('DOMContentLoaded', async function() {
   Features.ready();
   await FeatureMessages.ready();
   Policies.ready();
+  PoliciesJSON.ready();
+  PoliciesImports.ready();
+  PoliciesEntries.ready();
+  PoliciesSubjects.ready();
+  PoliciesResources.ready();
   Connections.ready();
   ConnectionsCRUD.ready();
-  ConnectionsMonitor.ready();
+  await ConnectionsMonitor.ready();
   Operations.ready();
   Authorization.ready();
   await Environments.ready();
+  Piggyback.ready();
+  Templates.ready();
 
   const thingDescription = WoTDescription({
     itemsId: 'tabItemsThing',

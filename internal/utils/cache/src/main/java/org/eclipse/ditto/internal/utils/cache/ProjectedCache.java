@@ -17,6 +17,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * A cache working on an embedded passed {@code cache} with values of type {@code <V>}, representing a projected cache
@@ -49,6 +50,11 @@ final class ProjectedCache<K, U, V> implements Cache<K, U> {
     }
 
     @Override
+    public CompletableFuture<Optional<U>> get(final K key, final Function<Throwable, Optional<U>> errorHandler) {
+        return cache.get(key, throwable -> errorHandler.apply(throwable).map(embed)).thenApply(projectOptional);
+    }
+
+    @Override
     public CompletableFuture<Optional<U>> getIfPresent(final K key) {
         return cache.getIfPresent(key).thenApply(projectOptional);
     }
@@ -61,6 +67,11 @@ final class ProjectedCache<K, U, V> implements Cache<K, U> {
     @Override
     public boolean invalidate(final K key) {
         return cache.invalidate(key);
+    }
+
+    @Override
+    public boolean invalidateConditionally(final K key, final Predicate<U> valueCondition) {
+        return cache.invalidateConditionally(key, value -> valueCondition.test(project.apply(value)));
     }
 
     @Override

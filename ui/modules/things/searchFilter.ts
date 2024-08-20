@@ -61,8 +61,7 @@ export async function ready() {
   });
 
   dom.searchThings.onclick = () => {
-    fillHistory(dom.searchFilterEdit.value);
-    ThingsSearch.searchTriggered(dom.searchFilterEdit.value);
+    ThingsSearch.searchTriggered(dom.searchFilterEdit.value, () => fillHistory(dom.searchFilterEdit.value));
   };
 
   dom.searchFavorite.onclick = () => {
@@ -74,8 +73,7 @@ export async function ready() {
 
   dom.searchFilterEdit.onkeyup = (event) => {
     if ((event.key === 'Enter' || event.code === 13) && dom.searchFilterEdit.value.indexOf(FILTER_PLACEHOLDER) < 0) {
-      fillHistory(dom.searchFilterEdit.value);
-      ThingsSearch.searchTriggered(dom.searchFilterEdit.value);
+      ThingsSearch.searchTriggered(dom.searchFilterEdit.value, () => fillHistory(dom.searchFilterEdit.value));
     } else {
       clearTimeout(keyStrokeTimeout);
       keyStrokeTimeout = setTimeout(checkIfFavorite, 1000);
@@ -105,9 +103,9 @@ function fillSearchFilterEdit(fillString) {
   dom.searchFilterEdit.value = fillString;
 
   checkIfFavorite();
-  const filterEditNeeded = checkAndMarkParameter();
+  const filterEditNeeded = Utils.checkAndMarkInInput(dom.searchFilterEdit, FILTER_PLACEHOLDER);
   if (!filterEditNeeded) {
-    ThingsSearch.searchTriggered(dom.searchFilterEdit.value);
+    ThingsSearch.searchTriggered(dom.searchFilterEdit.value, () => null);
   }
 }
 
@@ -203,19 +201,6 @@ function checkIfFavorite() {
     dom.favIcon.classList.replace('bi-star', 'bi-star-fill');
   } else {
     dom.favIcon.classList.replace('bi-star-fill', 'bi-star');
-  }
-}
-
-function checkAndMarkParameter() {
-  const index = dom.searchFilterEdit.value.indexOf(FILTER_PLACEHOLDER);
-  if (index >= 0) {
-    // filterString.replace(FILTER_PLACEHOLDER, '');
-    // dom.searchFilterEdit.value = filterString;
-    dom.searchFilterEdit.focus();
-    dom.searchFilterEdit.setSelectionRange(index, index + FILTER_PLACEHOLDER.length);
-    return true;
-  } else {
-    return false;
   }
 }
 
